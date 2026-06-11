@@ -1,133 +1,27 @@
 <#
 .SYNOPSIS
-    Windows 10/11 Optimizer & Debloater GUI v6.0
+    Windows 10/11 Optimizer & Debloater GUI v5.8
 .DESCRIPTION
     Herramienta completa para optimizar Windows 10/11 (22H2-24H2)
 .NOTES
     Compatible: Windows 10 20H2+, Windows 11 22H2/23H2/24H2
-    Requiere: Ejecutar como Administrador (solicita credenciales)
+    Requiere: Ejecutar como Administrador
 #>
 
-#region [INICIALIZACION CON SOLICITUD DE CREDENCIALES]
+#region [INICIALIZACION]
 $ErrorActionPreference = 'Continue'
-$global:ScriptVersion = "6.0"
+$global:ScriptVersion = "5.8"
 $global:CurrentJob = $null
 $global:RepairRunning = $false
 $global:RepairTimer = $null
 $global:InstallRunning = $false
 
-# Función para solicitar credenciales de administrador
-function Request-AdminCredentials {
-    Add-Type -AssemblyName System.Windows.Forms
-    Add-Type -AssemblyName System.Drawing
-    
-    $credForm = New-Object System.Windows.Forms.Form
-    $credForm.Text = "Windows Optimizer - Credenciales de Administrador"
-    $credForm.Size = New-Object System.Drawing.Size(400, 220)
-    $credForm.StartPosition = 'CenterScreen'
-    $credForm.FormBorderStyle = 'FixedDialog'
-    $credForm.MaximizeBox = $false
-    $credForm.MinimizeBox = $false
-    $credForm.BackColor = [System.Drawing.Color]::FromArgb(45, 45, 48)
-    $credForm.TopMost = $true
-    
-    $lblUser = New-Object System.Windows.Forms.Label
-    $lblUser.Text = "Usuario Administrador:"
-    $lblUser.Location = New-Object System.Drawing.Point(20, 25)
-    $lblUser.Size = New-Object System.Drawing.Size(130, 25)
-    $lblUser.ForeColor = [System.Drawing.Color]::White
-    $lblUser.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-    
-    $txtUser = New-Object System.Windows.Forms.TextBox
-    $txtUser.Location = New-Object System.Drawing.Point(160, 22)
-    $txtUser.Size = New-Object System.Drawing.Size(200, 23)
-    $txtUser.Text = [Environment]::UserName
-    
-    $lblPass = New-Object System.Windows.Forms.Label
-    $lblPass.Text = "Contraseña:"
-    $lblPass.Location = New-Object System.Drawing.Point(20, 60)
-    $lblPass.Size = New-Object System.Drawing.Size(130, 25)
-    $lblPass.ForeColor = [System.Drawing.Color]::White
-    $lblPass.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-    
-    $txtPass = New-Object System.Windows.Forms.TextBox
-    $txtPass.Location = New-Object System.Drawing.Point(160, 57)
-    $txtPass.Size = New-Object System.Drawing.Size(200, 23)
-    $txtPass.UseSystemPasswordChar = $true
-    
-    $lblInfo = New-Object System.Windows.Forms.Label
-    $lblInfo.Text = "Se requieren privilegios de administrador para ejecutar este script"
-    $lblInfo.Location = New-Object System.Drawing.Point(20, 95)
-    $lblInfo.Size = New-Object System.Drawing.Size(350, 30)
-    $lblInfo.ForeColor = [System.Drawing.Color]::LightGray
-    $lblInfo.Font = New-Object System.Drawing.Font("Segoe UI", 8)
-    
-    $btnOK = New-Object System.Windows.Forms.Button
-    $btnOK.Text = "Aceptar"
-    $btnOK.Location = New-Object System.Drawing.Point(100, 140)
-    $btnOK.Size = New-Object System.Drawing.Size(90, 30)
-    $btnOK.BackColor = [System.Drawing.Color]::FromArgb(50, 150, 50)
-    $btnOK.ForeColor = [System.Drawing.Color]::White
-    $btnOK.FlatStyle = 'Flat'
-    
-    $btnCancel = New-Object System.Windows.Forms.Button
-    $btnCancel.Text = "Cancelar"
-    $btnCancel.Location = New-Object System.Drawing.Point(210, 140)
-    $btnCancel.Size = New-Object System.Drawing.Size(90, 30)
-    $btnCancel.BackColor = [System.Drawing.Color]::FromArgb(150, 50, 50)
-    $btnCancel.ForeColor = [System.Drawing.Color]::White
-    $btnCancel.FlatStyle = 'Flat'
-    
-    $credForm.Controls.AddRange(@($lblUser, $txtUser, $lblPass, $txtPass, $lblInfo, $btnOK, $btnCancel))
-    
-    $result = $null
-    $btnOK.Add_Click({
-        $script:credUser = $txtUser.Text
-        $script:credPass = $txtPass.Text
-        $credForm.DialogResult = [System.Windows.Forms.DialogResult]::OK
-        $credForm.Close()
-    })
-    
-    $btnCancel.Add_Click({
-        $credForm.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
-        $credForm.Close()
-    })
-    
-    if ($credForm.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-        return @{
-            UserName = $script:credUser
-            Password = $script:credPass
-        }
-    } else {
-        return $null
-    }
-}
-
-# Verificar si ya somos administrador
-$isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
-
-if (-not $isAdmin) {
-    Write-Host "Solicitando credenciales de administrador..." -ForegroundColor Yellow
-    
-    # Solicitar credenciales
-    $credentials = Request-AdminCredentials
-    
-    if ($credentials -eq $null) {
-        Write-Host "Cancelado por el usuario." -ForegroundColor Red
-        exit 1
-    }
-    
-    # Crear SecureString para la contraseña
-    $securePass = ConvertTo-SecureString $credentials.Password -AsPlainText -Force
-    $credential = New-Object System.Management.Automation.PSCredential($credentials.UserName, $securePass)
-    
-    # Re-ejecutar el script con las credenciales proporcionadas
+# Auto-elevacion a Administrador
+If (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
     $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$($PSCommandPath)`""
-    Start-Process PowerShell.exe -ArgumentList $arguments -Credential $credential -Verb RunAs
-    exit 0
+    Start-Process PowerShell.exe -ArgumentList $arguments -Verb RunAs
+    Exit
 }
-
-Write-Host "Ejecutando con privilegios de administrador..." -ForegroundColor Green
 
 # Detectar version de Windows
 $global:WindowsVersion = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion").ProductName
@@ -180,6 +74,7 @@ $global:Bloatware = @(
     "Microsoft.Xbox.TCUI", "Microsoft.XboxApp", "Microsoft.XboxGameOverlay"
     "Microsoft.XboxGamingOverlay", "Microsoft.XboxIdentityProvider", "Microsoft.XboxSpeechToTextOverlay"
     "CandyCrush", "Facebook", "Twitter", "Spotify", "Netflix", "Disney"
+    "MicrosoftTeams", "MicrosoftTeams_8wekyb3d8bbwe", "Microsoft.Windows.CommunicationsApps"
     "Microsoft.Windows.WebExperiencePack", "MicrosoftWindows.Client.WebExperience"
 )
 
@@ -398,20 +293,21 @@ function Remove-OneDrive {
 function Install-OneDrive {
     Write-Log "========== INSTALANDO ONEDRIVE ==========" "TASK"
     try {
-        # URL oficial de OneDrive (enlace directo más confiable)
-        $oneDriveUrl = "https://oneclient.sfx.ms/Win/Installers/OneDriveSetup.exe"
+        # Descargar el instalador oficial de OneDrive
+        $oneDriveUrl = "https://go.microsoft.com/fwlink/?linkid=2249142"
         $installerPath = "$global:DownloadDir\OneDriveSetup.exe"
         
         Write-Log "Descargando instalador de OneDrive desde Microsoft..." "INFO"
         
-        # Intentar con Invoke-WebRequest
+        # Usar Invoke-WebRequest para descargar
         try {
-            $webClient = New-Object System.Net.WebClient
-            $webClient.DownloadFile($oneDriveUrl, $installerPath)
+            Invoke-WebRequest -Uri $oneDriveUrl -OutFile $installerPath -UseBasicParsing -ErrorAction Stop
             Write-Log "Descarga completada: $installerPath" "OK"
         } catch {
             Write-Log "Error en descarga, intentando metodo alternativo..." "WARN"
-            Invoke-WebRequest -Uri $oneDriveUrl -OutFile $installerPath -UseBasicParsing
+            # Metodo alternativo con .NET
+            $webClient = New-Object System.Net.WebClient
+            $webClient.DownloadFile($oneDriveUrl, $installerPath)
             Write-Log "Descarga completada (metodo alternativo)" "OK"
         }
         
@@ -424,7 +320,6 @@ function Install-OneDrive {
                 Write-Log "OneDrive instalado (codigo: $($process.ExitCode))" "OK"
             }
             # Limpiar instalador
-            Start-Sleep -Seconds 2
             Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
         } else {
             Write-Log "No se pudo descargar el instalador de OneDrive" "ERROR"
@@ -460,7 +355,7 @@ function Install-SelectedApps {
             switch ($app) {
                 "7zip" { 
                     $process = Start-Process -FilePath "winget" -ArgumentList "install --id 7zip.7zip --silent --accept-package-agreements --accept-source-agreements" -NoNewWindow -PassThru -Wait
-                    if ($process.ExitCode -eq 0) { Write-Log "  Instalado: $app" "OK" }
+                    if ($process.ExitCode -eq 0 -or $process.ExitCode -eq 0) { Write-Log "  Instalado: $app" "OK" }
                     else { Write-Log "  Error instalando: $app (codigo: $($process.ExitCode))" "WARN" }
                 }
                 "Chrome" { 
@@ -478,10 +373,15 @@ function Install-SelectedApps {
                     if ($process.ExitCode -eq 0) { Write-Log "  Instalado: $app" "OK" }
                     else { Write-Log "  Error instalando: $app (codigo: $($process.ExitCode))" "WARN" }
                 }
-                "Teams" { 
-                    Write-Log "  Teams requiere instalacion manual desde el sitio oficial" "INFO"
-                    Start-Process "https://www.microsoft.com/es-mx/microsoft-teams/download-app"
-                    Write-Log "  Se ha abierto el navegador para descargar Teams" "OK"
+                "Steam" { 
+                    $process = Start-Process -FilePath "winget" -ArgumentList "install --id Valve.Steam --silent --accept-package-agreements --accept-source-agreements" -NoNewWindow -PassThru -Wait
+                    if ($process.ExitCode -eq 0) { Write-Log "  Instalado: $app" "OK" }
+                    else { Write-Log "  Error instalando: $app (codigo: $($process.ExitCode))" "WARN" }
+                }
+                "Discord" { 
+                    $process = Start-Process -FilePath "winget" -ArgumentList "install --id Discord.Discord --silent --accept-package-agreements --accept-source-agreements" -NoNewWindow -PassThru -Wait
+                    if ($process.ExitCode -eq 0) { Write-Log "  Instalado: $app" "OK" }
+                    else { Write-Log "  Error instalando: $app (codigo: $($process.ExitCode))" "WARN" }
                 }
             }
         } catch {
@@ -585,7 +485,8 @@ function Start-RepairJob {
             Write-Step -Num 10 -Total $total -Name "Limpiar cache DNS" -Status "iniciando"
             ipconfig /flushdns 2>&1 | Out-Null
             ipconfig /renew 2>&1 | Out-Null
-            ipconfig /registerdns 2>&1 | Out-Null            Write-Step -Num 10 -Total $total -Name "Limpiar cache DNS" -Status "COMPLETADO"
+            ipconfig /registerdns 2>&1 | Out-Null
+            Write-Step -Num 10 -Total $total -Name "Limpiar cache DNS" -Status "COMPLETADO"
             
             Write-Step -Num 11 -Total $total -Name "Deshabilitar Firewall" -Status "iniciando"
             netsh advfirewall set domainprofile state off 2>&1 | Out-Null
@@ -810,7 +711,7 @@ $DebloatLabel.ForeColor = [System.Drawing.ColorTranslator]::FromHtml("#eeeeee")
 
 $RemoveAllBloatware = New-Object System.Windows.Forms.Button
 $RemoveAllBloatware.FlatStyle = 'Flat'
-$RemoveAllBloatware.text = "ELIMINAR TODO (Copilot, Xbox, Widgets, Telemetria)"
+$RemoveAllBloatware.text = "ELIMINAR TODO (Copilot, Teams, Xbox, Widgets, Telemetria)"
 $RemoveAllBloatware.width = 650
 $RemoveAllBloatware.height = 40
 $RemoveAllBloatware.location = New-Object System.Drawing.Point(5, 30)
@@ -930,7 +831,7 @@ $WingetStatus.AutoSize = $true
 $WingetStatus.location = New-Object System.Drawing.Point(10, 30)
 $WingetStatus.Font = New-Object System.Drawing.Font('Consolas', 8)
 
-# Fila 1 - Aplicaciones via Winget
+# Fila 1
 $Chk7zip = New-Object System.Windows.Forms.CheckBox
 $Chk7zip.Text = "7-Zip"
 $Chk7zip.Location = New-Object System.Drawing.Point(10, 55)
@@ -955,16 +856,22 @@ $ChkVLC.Location = New-Object System.Drawing.Point(280, 55)
 $ChkVLC.ForeColor = [System.Drawing.ColorTranslator]::FromHtml("#eeeeee")
 $ChkVLC.AutoSize = $true
 
-# Fila 2 - Aplicaciones especiales
-$ChkTeams = New-Object System.Windows.Forms.CheckBox
-$ChkTeams.Text = "Teams (Abre pagina web)"
-$ChkTeams.Location = New-Object System.Drawing.Point(10, 85)
-$ChkTeams.ForeColor = [System.Drawing.ColorTranslator]::FromHtml("#ffcc88")
-$ChkTeams.AutoSize = $true
+$ChkSteam = New-Object System.Windows.Forms.CheckBox
+$ChkSteam.Text = "Steam"
+$ChkSteam.Location = New-Object System.Drawing.Point(370, 55)
+$ChkSteam.ForeColor = [System.Drawing.ColorTranslator]::FromHtml("#eeeeee")
+$ChkSteam.AutoSize = $true
 
+$ChkDiscord = New-Object System.Windows.Forms.CheckBox
+$ChkDiscord.Text = "Discord"
+$ChkDiscord.Location = New-Object System.Drawing.Point(460, 55)
+$ChkDiscord.ForeColor = [System.Drawing.ColorTranslator]::FromHtml("#eeeeee")
+$ChkDiscord.AutoSize = $true
+
+# Fila 2 - OneDrive (instalador especial)
 $ChkOneDrive = New-Object System.Windows.Forms.CheckBox
-$ChkOneDrive.Text = "OneDrive (Descarga directa)"
-$ChkOneDrive.Location = New-Object System.Drawing.Point(200, 85)
+$ChkOneDrive.Text = "OneDrive (Descarga desde Microsoft)"
+$ChkOneDrive.Location = New-Object System.Drawing.Point(10, 85)
 $ChkOneDrive.ForeColor = [System.Drawing.ColorTranslator]::FromHtml("#ffcc88")
 $ChkOneDrive.AutoSize = $true
 
@@ -985,14 +892,14 @@ $BtnInstall.Add_Click({
     
     $apps = @()
     $installOneDriveFlag = $false
-    $installTeamsFlag = $false
     
     if ($Chk7zip.Checked) { $apps += "7zip" }
     if ($ChkChrome.Checked) { $apps += "Chrome" }
     if ($ChkFirefox.Checked) { $apps += "Firefox" }
     if ($ChkVLC.Checked) { $apps += "VLC" }
+    if ($ChkSteam.Checked) { $apps += "Steam" }
+    if ($ChkDiscord.Checked) { $apps += "Discord" }
     if ($ChkOneDrive.Checked) { $installOneDriveFlag = $true }
-    if ($ChkTeams.Checked) { $installTeamsFlag = $true }
     
     if ($apps.Count -gt 0) {
         Install-SelectedApps -Apps $apps
@@ -1002,26 +909,21 @@ $BtnInstall.Add_Click({
         Install-OneDrive
     }
     
-    if ($installTeamsFlag) {
-        Write-Log "Abriendo pagina de descarga de Teams..." "INFO"
-        Start-Process "https://www.microsoft.com/es-mx/microsoft-teams/download-app"
-        Write-Log "Se ha abierto el navegador para descargar Teams" "OK"
-    }
-    
     # Desmarcar todos
     $Chk7zip.Checked = $false
     $ChkChrome.Checked = $false
     $ChkFirefox.Checked = $false
     $ChkVLC.Checked = $false
-    $ChkTeams.Checked = $false
+    $ChkSteam.Checked = $false
+    $ChkDiscord.Checked = $false
     $ChkOneDrive.Checked = $false
     
-    if ($apps.Count -eq 0 -and -not $installOneDriveFlag -and -not $installTeamsFlag) {
+    if ($apps.Count -eq 0 -and -not $installOneDriveFlag) {
         Write-Log "No se selecciono ninguna aplicacion" "WARN"
     }
 })
 
-$InstallPanel.controls.AddRange(@($InstallLabel, $WingetStatus, $Chk7zip, $ChkChrome, $ChkFirefox, $ChkVLC, $ChkTeams, $ChkOneDrive, $BtnInstall))
+$InstallPanel.controls.AddRange(@($InstallLabel, $WingetStatus, $Chk7zip, $ChkChrome, $ChkFirefox, $ChkVLC, $ChkSteam, $ChkDiscord, $ChkOneDrive, $BtnInstall))
 
 # Panel Herramientas
 $ToolsPanel = New-Object System.Windows.Forms.Panel
@@ -1184,8 +1086,7 @@ Write-Log "=============================================" "INFO"
 Write-Log "Listo para usar - Selecciona una opcion" "INFO"
 Write-Log "=============================================" "INFO"
 Write-Log "APLICACIONES DISPONIBLES PARA INSTALAR:" "INFO"
-Write-Log "  7-Zip, Chrome, Firefox, VLC (via Winget)" "INFO"
-Write-Log "  Teams (Abre pagina oficial de descarga)" "INFO"
+Write-Log "  7-Zip, Chrome, Firefox, VLC, Steam, Discord" "INFO"
 Write-Log "  OneDrive (Descarga directa desde Microsoft)" "INFO"
 Write-Log "=============================================" "INFO"
 
