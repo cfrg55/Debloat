@@ -6,6 +6,7 @@
 .NOTES
     Compatible: Windows 10 20H2+, Windows 11 22H2/23H2/24H2
     Requiere: Ejecutar como Administrador
+    
 #>
 
 #region [INICIALIZACION]
