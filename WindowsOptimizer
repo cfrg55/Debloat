@@ -516,9 +516,9 @@ $chk7zip.Text = "7-Zip"; $chk7zip.Location = New-Object System.Drawing.Point(10,
 $chkChrome = New-Object System.Windows.Forms.CheckBox
 $chkChrome.Text = "Chrome"; $chkChrome.Location = New-Object System.Drawing.Point(115, 25); $chkChrome.Font = $fontNorm; $chkChrome.ForeColor = $colorText
 $chkFirefox = New-Object System.Windows.Forms.CheckBox
-$chkFirefox.Text = "Firefox"; $chkFirefox.Location = New-Object System.Drawing.Point(195, 25); $chkFirefox.Font = $fontNorm; $chkFirefox.ForeColor = $colorText
+$chkFirefox.Text = "Firefox"; $chkFirefox.Location = New-Object System.Drawing.Point(215, 25); $chkFirefox.Font = $fontNorm; $chkFirefox.ForeColor = $colorText
 $chkVLC = New-Object System.Windows.Forms.CheckBox
-$chkVLC.Text = "VLC"; $chkVLC.Location = New-Object System.Drawing.Point(285, 25); $chkVLC.Font = $fontNorm; $chkVLC.ForeColor = $colorText
+$chkVLC.Text = "VLC"; $chkVLC.Location = New-Object System.Drawing.Point(325, 25); $chkVLC.Font = $fontNorm; $chkVLC.ForeColor = $colorText
 
 # Fila 2
 $chkOneDrive = New-Object System.Windows.Forms.CheckBox
