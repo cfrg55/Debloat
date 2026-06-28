@@ -514,11 +514,11 @@ $lblInstall.ForeColor = $colorText
 $chk7zip = New-Object System.Windows.Forms.CheckBox
 $chk7zip.Text = "7-Zip"; $chk7zip.Location = New-Object System.Drawing.Point(10, 25); $chk7zip.Font = $fontNorm; $chk7zip.ForeColor = $colorText
 $chkChrome = New-Object System.Windows.Forms.CheckBox
-$chkChrome.Text = "Chrome"; $chkChrome.Location = New-Object System.Drawing.Point(85, 25); $chkChrome.Font = $fontNorm; $chkChrome.ForeColor = $colorText
+$chkChrome.Text = "Chrome"; $chkChrome.Location = New-Object System.Drawing.Point(105, 25); $chkChrome.Font = $fontNorm; $chkChrome.ForeColor = $colorText
 $chkFirefox = New-Object System.Windows.Forms.CheckBox
-$chkFirefox.Text = "Firefox"; $chkFirefox.Location = New-Object System.Drawing.Point(170, 25); $chkFirefox.Font = $fontNorm; $chkFirefox.ForeColor = $colorText
+$chkFirefox.Text = "Firefox"; $chkFirefox.Location = New-Object System.Drawing.Point(185, 25); $chkFirefox.Font = $fontNorm; $chkFirefox.ForeColor = $colorText
 $chkVLC = New-Object System.Windows.Forms.CheckBox
-$chkVLC.Text = "VLC"; $chkVLC.Location = New-Object System.Drawing.Point(260, 25); $chkVLC.Font = $fontNorm; $chkVLC.ForeColor = $colorText
+$chkVLC.Text = "VLC"; $chkVLC.Location = New-Object System.Drawing.Point(275, 25); $chkVLC.Font = $fontNorm; $chkVLC.ForeColor = $colorText
 
 # Fila 2
 $chkOneDrive = New-Object System.Windows.Forms.CheckBox
