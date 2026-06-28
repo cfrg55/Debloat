@@ -576,7 +576,7 @@ $currentY += 53
 
 # Creditos
 $lblCredit = New-Object System.Windows.Forms.Label
-$lblCredit.Text = "Creado con DeepSeek por CFRG, con cariño"
+$lblCredit.Text = "Creado con DeepSeek por CFRG, con cariño - V1.1"
 $lblCredit.Location = New-Object System.Drawing.Point(10, $currentY)
 $lblCredit.Size = New-Object System.Drawing.Size($btnWidth, 14)
 $lblCredit.Font = $fontItalic
