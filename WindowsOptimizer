@@ -313,7 +313,20 @@ function Install-SelectedApps {
         try {
             switch ($app) {
                 "7zip" { winget install --id 7zip.7zip --silent --accept-package-agreements --accept-source-agreements }
-                "Chrome" { winget install --id Google.Chrome --silent --accept-package-agreements --accept-source-agreements }
+                "Chrome" { #winget install --id Google.Chrome --silent --accept-package-agreements --accept-source-agreements
+                            # 1. Crear carpeta temporal
+                            $tempDir = "C:\ChromeTemp"
+                            New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
+
+                            # 2. Establecer variables de entorno para toda la sesión
+                            $env:TEMP = $tempDir
+                            $env:TMP = $tempDir
+
+                            # 3. Ejecutar winget con estas variables
+                            winget install --id Google.Chrome --silent --accept-package-agreements --accept-source-agreements
+
+                            # 4. Limpiar (opcional)
+                            Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
                 "Firefox" { winget install --id Mozilla.Firefox --silent --accept-package-agreements --accept-source-agreements }
                 "VLC" { winget install --id VideoLAN.VLC --silent --accept-package-agreements --accept-source-agreements }
             }
