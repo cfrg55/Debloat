@@ -1,0 +1,220 @@
+function Install-SelectedApps {
+    param([string[]]$Apps)
+    
+    if ($global:InstallRunning) { 
+        Write-Log "Ya hay una instalacion en curso" "WARN"
+        return 
+    }
+    
+    $global:InstallRunning = $true
+    Write-Log "========== INSTALANDO APLICACIONES ==========" "TASK"
+    
+    if (-not $global:WingetAvailable) {
+        Write-Log "Winget no esta disponible. Abriendo Microsoft Store..." "WARN"
+        Start-Process "ms-windows-store://pdp/?productid=9NBLGGH4NNS1"
+        Write-Log "Instala 'App Installer' desde la Store y vuelve a ejecutar" "INFO"
+        $global:InstallRunning = $false
+        return
+    }
+    
+    # Función para verificar si un paquete existe
+    function Test-WingetPackage {
+        param([string]$PackageId)
+        try {
+            $result = winget search --id $PackageId 2>&1
+            return $result -match $PackageId
+        } catch { 
+            return $false 
+        }
+    }
+    
+    # Función para instalar con reintentos
+    function Install-PackageWithRetry {
+        param(
+            [string]$PackageId,
+            [string]$AppName,
+            [string]$FallbackUrl
+        )
+        
+        $maxRetries = 3
+        $retryCount = 0
+        $success = $false
+        
+        while (-not $success -and $retryCount -lt $maxRetries) {
+            $retryCount++
+            Write-Log "  Intento $retryCount de $maxRetries para $AppName..." "INFO"
+            
+            try {
+                # Crear directorio temporal para Chrome (si es necesario)
+                $tempDir = "C:\Temp\WingetInstall"
+                New-Item -ItemType Directory -Force -Path $tempDir -ErrorAction SilentlyContinue | Out-Null
+                
+                # Establecer variables de entorno para la instalación
+                $env:TEMP = $tempDir
+                $env:TMP = $tempDir
+                
+                # Ejecutar winget
+                $process = Start-Process -FilePath "winget" -ArgumentList "install --id $PackageId --silent --accept-package-agreements --accept-source-agreements --disable-interactivity" -NoNewWindow -PassThru -Wait
+                
+                # Limpiar directorio temporal
+                Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+                
+                if ($process.ExitCode -eq 0) {
+                    Write-Log "  Instalado: $AppName" "OK"
+                    $success = $true
+                } elseif ($process.ExitCode -eq -1978335217) {
+                    Write-Log "  Paquete no encontrado o ID incorrecto" "WARN"
+                    
+                    # Intentar buscar el paquete automáticamente
+                    Write-Log "  Buscando paquete para: $AppName..." "INFO"
+                    $searchResult = winget search $AppName 2>&1
+                    
+                    # Extraer el ID de la búsqueda
+                    if ($searchResult -match "\s([a-zA-Z0-9]+\.[a-zA-Z0-9.]+)\s") {
+                        $foundId = $Matches[1]
+                        Write-Log "  Paquete encontrado: $foundId" "INFO"
+                        
+                        # Intentar con el ID encontrado
+                        $process2 = Start-Process -FilePath "winget" -ArgumentList "install --id $foundId --silent --accept-package-agreements --accept-source-agreements --disable-interactivity" -NoNewWindow -PassThru -Wait
+                        if ($process2.ExitCode -eq 0) {
+                            Write-Log "  Instalado: $AppName (usando ID: $foundId)" "OK"
+                            $success = $true
+                        } else {
+                            Write-Log "  No se pudo instalar con el ID encontrado (Código: $($process2.ExitCode))" "WARN"
+                        }
+                    } else {
+                        Write-Log "  No se encontraron paquetes para: $AppName" "WARN"
+                    }
+                } else {
+                    Write-Log "  Error instalando: $AppName (Código: $($process.ExitCode))" "WARN"
+                }
+            } catch {
+                Write-Log "  Excepción instalando: $AppName - $_" "ERROR"
+            }
+            
+            if (-not $success -and $retryCount -lt $maxRetries) {
+                Write-Log "  Esperando 3 segundos antes de reintentar..." "INFO"
+                Start-Sleep -Seconds 3
+                # Actualizar Winget antes de reintentar
+                Write-Log "  Actualizando Winget..." "INFO"
+                winget upgrade --id Microsoft.AppInstaller --silent 2>&1 | Out-Null
+            }
+        }
+        
+        if (-not $success -and $FallbackUrl) {
+            Write-Log "  Abriendo pagina de descarga: $FallbackUrl" "INFO"
+            Start-Process $FallbackUrl
+        }
+        
+        return $success
+    }
+    
+    # Mapeo de aplicaciones con sus IDs y URLs de fallback
+    $appMap = @{
+        "7zip" = @{
+            PackageId = "7zip.7zip"
+            FallbackUrl = "https://www.7-zip.org/download.html"
+        }
+        "Chrome" = @{
+            PackageId = "Google.Chrome"
+            FallbackUrl = "https://www.google.com/chrome/"
+        }
+        "Firefox" = @{
+            PackageId = "Mozilla.Firefox"
+            FallbackUrl = "https://www.mozilla.org/firefox/new/"
+        }
+        "VLC" = @{
+            PackageId = "VideoLAN.VLC"
+            FallbackUrl = "https://www.videolan.org/vlc/download-windows.html"
+        }
+    }
+    
+    # Actualizar Winget antes de comenzar
+    Write-Log "Actualizando Winget..." "INFO"
+    try {
+        winget upgrade --id Microsoft.AppInstaller --silent 2>&1 | Out-Null
+        Write-Log "Winget actualizado" "OK"
+    } catch {
+        Write-Log "No se pudo actualizar Winget" "WARN"
+    }
+    
+    # Instalar cada aplicación
+    foreach ($app in $Apps) {
+        Write-Log "Instalando: $app..." "INFO"
+        
+        if ($appMap.ContainsKey($app)) {
+            $packageInfo = $appMap[$app]
+            $success = Install-PackageWithRetry -PackageId $packageInfo.PackageId -AppName $app -FallbackUrl $packageInfo.FallbackUrl
+            
+            if (-not $success) {
+                Write-Log "  No se pudo instalar $app después de varios intentos" "ERROR"
+            }
+        } else {
+            Write-Log "  Aplicacion no reconocida: $app" "WARN"
+        }
+        
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+    
+    Write-Log "========== INSTALACION COMPLETADA ==========" "OK"
+    $global:InstallRunning = $false
+}
+
+function Install-Teams {
+    Write-Log "========== INSTALANDO MICROSOFT TEAMS ==========" "TASK"
+    
+    if (-not $global:WingetAvailable) { 
+        Write-Log "Winget no disponible. Abriendo pagina de descarga..." "WARN"
+        Start-Process "https://www.microsoft.com/es-mx/microsoft-teams/download-app"
+        return
+    }
+    
+    try {
+        # Verificar si Teams ya está instalado
+        $teamsCheck = winget list --id Microsoft.Teams 2>&1
+        if ($teamsCheck -match "Microsoft.Teams") {
+            Write-Log "Teams ya está instalado" "OK"
+            return
+        }
+        
+        Write-Log "Instalando Teams via Winget..." "INFO"
+        $maxRetries = 3
+        $retryCount = 0
+        $success = $false
+        
+        while (-not $success -and $retryCount -lt $maxRetries) {
+            $retryCount++
+            Write-Log "  Intento $retryCount de $maxRetries..." "INFO"
+            
+            $process = Start-Process -FilePath "winget" -ArgumentList "install --id Microsoft.Teams --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity" -NoNewWindow -PassThru -Wait
+            
+            if ($process.ExitCode -eq 0) {
+                Write-Log "Teams instalado correctamente" "OK"
+                $success = $true
+            } elseif ($process.ExitCode -eq -1978335217) {
+                Write-Log "  Teams no encontrado en Winget" "WARN"
+                Write-Log "  Abriendo pagina de descarga..." "INFO"
+                Start-Process "https://www.microsoft.com/es-mx/microsoft-teams/download-app"
+                $success = $true # Marcar como true para no seguir reintentando
+            } else {
+                Write-Log "  Error instalando Teams. Codigo: $($process.ExitCode)" "WARN"
+            }
+            
+            if (-not $success -and $retryCount -lt $maxRetries) {
+                Write-Log "  Esperando 3 segundos antes de reintentar..." "INFO"
+                Start-Sleep -Seconds 3
+            }
+        }
+        
+        if (-not $success) {
+            Write-Log "No se pudo instalar Teams. Abriendo pagina de descarga..." "WARN"
+            Start-Process "https://www.microsoft.com/es-mx/microsoft-teams/download-app"
+        }
+    } catch {
+        Write-Log "Error instalando Teams: $_" "ERROR"
+        Write-Log "Abriendo pagina de descarga manual..." "INFO"
+        Start-Process "https://www.microsoft.com/es-mx/microsoft-teams/download-app"
+    }
+    
+    Write-Log "========== COMPLETADO ==========" "OK"
+}
