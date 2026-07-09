@@ -1,220 +1,773 @@
-function Install-SelectedApps {
-    param([string[]]$Apps)
+<#
+.SYNOPSIS
+    Windows 10/11 Optimizer & Debloater GUI v6.9 - UNC Compatible
+.DESCRIPTION
+    Herramienta completa para optimizar Windows 10/11 (22H2-24H2)
+    Compatible con ejecucion desde rutas UNC (red)
+.NOTES
+    Compatible: Windows 10 20H2+, Windows 11 22H2/23H2/24H2
+    Requiere: Ejecutar como Administrador
+#>
+
+#region [INICIALIZACION CON ELEVACION - COMPATIBLE CON UNC]
+$ErrorActionPreference = 'Continue'
+$global:ScriptVersion = "6.9"
+
+# Función para auto-elevarse (funciona con rutas UNC)
+function Test-AdminElevation {
+    $currentPrincipal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+    $isAdmin = $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     
-    if ($global:InstallRunning) { 
-        Write-Log "Ya hay una instalacion en curso" "WARN"
-        return 
-    }
-    
-    $global:InstallRunning = $true
-    Write-Log "========== INSTALANDO APLICACIONES ==========" "TASK"
-    
-    if (-not $global:WingetAvailable) {
-        Write-Log "Winget no esta disponible. Abriendo Microsoft Store..." "WARN"
-        Start-Process "ms-windows-store://pdp/?productid=9NBLGGH4NNS1"
-        Write-Log "Instala 'App Installer' desde la Store y vuelve a ejecutar" "INFO"
-        $global:InstallRunning = $false
-        return
-    }
-    
-    # Función para verificar si un paquete existe
-    function Test-WingetPackage {
-        param([string]$PackageId)
-        try {
-            $result = winget search --id $PackageId 2>&1
-            return $result -match $PackageId
-        } catch { 
-            return $false 
-        }
-    }
-    
-    # Función para instalar con reintentos
-    function Install-PackageWithRetry {
-        param(
-            [string]$PackageId,
-            [string]$AppName,
-            [string]$FallbackUrl
-        )
+    if (-not $isAdmin) {
+        Write-Host "Se requieren privilegios de administrador. Solicitando elevacion..." -ForegroundColor Yellow
         
-        $maxRetries = 3
-        $retryCount = 0
-        $success = $false
-        
-        while (-not $success -and $retryCount -lt $maxRetries) {
-            $retryCount++
-            Write-Log "  Intento $retryCount de $maxRetries para $AppName..." "INFO"
-            
-            try {
-                # Crear directorio temporal para Chrome (si es necesario)
-                $tempDir = "C:\Temp\WingetInstall"
-                New-Item -ItemType Directory -Force -Path $tempDir -ErrorAction SilentlyContinue | Out-Null
-                
-                # Establecer variables de entorno para la instalación
-                $env:TEMP = $tempDir
-                $env:TMP = $tempDir
-                
-                # Ejecutar winget
-                $process = Start-Process -FilePath "winget" -ArgumentList "install --id $PackageId --silent --accept-package-agreements --accept-source-agreements --disable-interactivity" -NoNewWindow -PassThru -Wait
-                
-                # Limpiar directorio temporal
-                Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
-                
-                if ($process.ExitCode -eq 0) {
-                    Write-Log "  Instalado: $AppName" "OK"
-                    $success = $true
-                } elseif ($process.ExitCode -eq -1978335217) {
-                    Write-Log "  Paquete no encontrado o ID incorrecto" "WARN"
-                    
-                    # Intentar buscar el paquete automáticamente
-                    Write-Log "  Buscando paquete para: $AppName..." "INFO"
-                    $searchResult = winget search $AppName 2>&1
-                    
-                    # Extraer el ID de la búsqueda
-                    if ($searchResult -match "\s([a-zA-Z0-9]+\.[a-zA-Z0-9.]+)\s") {
-                        $foundId = $Matches[1]
-                        Write-Log "  Paquete encontrado: $foundId" "INFO"
-                        
-                        # Intentar con el ID encontrado
-                        $process2 = Start-Process -FilePath "winget" -ArgumentList "install --id $foundId --silent --accept-package-agreements --accept-source-agreements --disable-interactivity" -NoNewWindow -PassThru -Wait
-                        if ($process2.ExitCode -eq 0) {
-                            Write-Log "  Instalado: $AppName (usando ID: $foundId)" "OK"
-                            $success = $true
-                        } else {
-                            Write-Log "  No se pudo instalar con el ID encontrado (Código: $($process2.ExitCode))" "WARN"
-                        }
-                    } else {
-                        Write-Log "  No se encontraron paquetes para: $AppName" "WARN"
-                    }
-                } else {
-                    Write-Log "  Error instalando: $AppName (Código: $($process.ExitCode))" "WARN"
-                }
-            } catch {
-                Write-Log "  Excepción instalando: $AppName - $_" "ERROR"
-            }
-            
-            if (-not $success -and $retryCount -lt $maxRetries) {
-                Write-Log "  Esperando 3 segundos antes de reintentar..." "INFO"
-                Start-Sleep -Seconds 3
-                # Actualizar Winget antes de reintentar
-                Write-Log "  Actualizando Winget..." "INFO"
-                winget upgrade --id Microsoft.AppInstaller --silent 2>&1 | Out-Null
-            }
+        # Obtener la ruta del script actual
+        $scriptPath = $PSCommandPath
+        if (-not $scriptPath -or $scriptPath -eq "") {
+            $scriptPath = $MyInvocation.MyCommand.Definition
         }
         
-        if (-not $success -and $FallbackUrl) {
-            Write-Log "  Abriendo pagina de descarga: $FallbackUrl" "INFO"
-            Start-Process $FallbackUrl
-        }
+        # Para rutas UNC, necesitamos copiar el script localmente primero
+        $isUncPath = $scriptPath -like "\\*"
         
-        return $success
-    }
-    
-    # Mapeo de aplicaciones con sus IDs y URLs de fallback
-    $appMap = @{
-        "7zip" = @{
-            PackageId = "7zip.7zip"
-            FallbackUrl = "https://www.7-zip.org/download.html"
-        }
-        "Chrome" = @{
-            PackageId = "Google.Chrome"
-            FallbackUrl = "https://www.google.com/chrome/"
-        }
-        "Firefox" = @{
-            PackageId = "Mozilla.Firefox"
-            FallbackUrl = "https://www.mozilla.org/firefox/new/"
-        }
-        "VLC" = @{
-            PackageId = "VideoLAN.VLC"
-            FallbackUrl = "https://www.videolan.org/vlc/download-windows.html"
-        }
-    }
-    
-    # Actualizar Winget antes de comenzar
-    Write-Log "Actualizando Winget..." "INFO"
-    try {
-        winget upgrade --id Microsoft.AppInstaller --silent 2>&1 | Out-Null
-        Write-Log "Winget actualizado" "OK"
-    } catch {
-        Write-Log "No se pudo actualizar Winget" "WARN"
-    }
-    
-    # Instalar cada aplicación
-    foreach ($app in $Apps) {
-        Write-Log "Instalando: $app..." "INFO"
-        
-        if ($appMap.ContainsKey($app)) {
-            $packageInfo = $appMap[$app]
-            $success = Install-PackageWithRetry -PackageId $packageInfo.PackageId -AppName $app -FallbackUrl $packageInfo.FallbackUrl
-            
-            if (-not $success) {
-                Write-Log "  No se pudo instalar $app después de varios intentos" "ERROR"
-            }
+        if ($isUncPath) {
+            Write-Host "Detectada ejecucion desde ruta UNC. Copiando script a temporal local..." -ForegroundColor Cyan
+            $localScript = "$env:TEMP\WindowsOptimizer_$(Get-Random).ps1"
+            Copy-Item -Path $scriptPath -Destination $localScript -Force
+            $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$localScript`""
+            $process = Start-Process -FilePath "PowerShell.exe" -ArgumentList $arguments -Verb RunAs -PassThru
+            $process.WaitForExit()
+            # Limpiar archivo temporal
+            Start-Sleep -Seconds 2
+            Remove-Item $localScript -Force -ErrorAction SilentlyContinue
         } else {
-            Write-Log "  Aplicacion no reconocida: $app" "WARN"
+            $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
+            $process = Start-Process -FilePath "PowerShell.exe" -ArgumentList $arguments -Verb RunAs -PassThru
+            $process.WaitForExit()
         }
-        
+        exit
+    }
+    
+    Write-Host "Ejecutando con privilegios de administrador..." -ForegroundColor Green
+    return $true
+}
+
+# Ejecutar elevación
+Test-AdminElevation
+
+# Detectar version de Windows
+$global:WindowsVersion = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion").ProductName
+$global:WindowsBuild = [Environment]::OSVersion.Version.Build
+$global:IsWindows11 = $global:WindowsBuild -ge 22000
+$global:Is24H2 = $global:WindowsBuild -ge 26100
+
+# Verificar Winget
+$global:WingetAvailable = $false
+try {
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        $global:WingetAvailable = $true
+    }
+} catch { }
+
+# Directorios (siempre locales, no en red)
+$global:LogDir = "C:\Temp\WindowsOptimizer"
+$global:DownloadDir = "$global:LogDir\Downloads"
+New-Item -Path $global:LogDir -ItemType Directory -Force | Out-Null
+New-Item -Path $global:DownloadDir -ItemType Directory -Force | Out-Null
+
+$global:LogFile = "$global:LogDir\optimizer_log.txt"
+if (Test-Path $global:LogFile) { Remove-Item $global:LogFile -Force }
+
+# Variables para UI
+$global:LogTextBox = $null
+$global:CurrentJob = $null
+$global:RepairRunning = $false
+$global:RepairTimer = $null
+$global:InstallRunning = $false
+
+function Write-Log {
+    param([string]$Message, [string]$Type = "INFO")
+    $timestamp = Get-Date -Format "HH:mm:ss"
+    $logEntry = "[$timestamp] [$Type] $Message`r`n"
+    Add-Content -Path $global:LogFile -Value $logEntry -Encoding UTF8
+    Write-Host $logEntry -NoNewline
+    if ($global:LogTextBox -and !$global:LogTextBox.IsDisposed) {
+        $global:LogTextBox.AppendText($logEntry)
+        $global:LogTextBox.ScrollToCaret()
         [System.Windows.Forms.Application]::DoEvents()
     }
+}
+#endregion
+
+#region [LISTAS DE BLOATWARE]
+$global:Bloatware = @(
+    "Microsoft.BingNews", "Microsoft.BingWeather", "Microsoft.GetHelp", "Microsoft.Getstarted"
+    "Microsoft.Microsoft3DViewer", "Microsoft.MicrosoftOfficeHub", "Microsoft.MicrosoftSolitaireCollection"
+    "Microsoft.MixedReality.Portal", "Microsoft.Office.OneNote", "Microsoft.People", "Microsoft.Print3D"
+    "Microsoft.SkypeApp", "Microsoft.WindowsAlarms", "Microsoft.WindowsFeedbackHub", "Microsoft.WindowsMaps"
+    "Microsoft.Xbox.TCUI", "Microsoft.XboxApp", "Microsoft.XboxGameOverlay", "Microsoft.XboxGamingOverlay"
+    "Microsoft.XboxIdentityProvider", "Microsoft.YourPhone", "Microsoft.ZuneMusic", "Microsoft.ZuneVideo"
+    "CandyCrush", "Facebook", "Twitter", "Spotify", "Netflix", "Disney"
+)
+if ($global:Is24H2) { $global:Bloatware += @("Microsoft.Windows.AI.Copilot", "Microsoft.Copilot", "Microsoft.Windows.Recall") }
+$global:BloatwareRegex = $global:Bloatware -join '|'
+#endregion
+
+#region [FUNCIONES]
+function Clear-CurrentUserTemp {
+    Write-Log "========== LIMPIANDO PERFIL ACTUAL ==========" "TASK"
+    try {
+        if (Test-Path "$env:TEMP") {
+            Get-ChildItem "$env:TEMP" -Recurse -EA 0 | Where-Object { !$_.PSIsContainer } | Remove-Item -Force -EA 0
+            Write-Log "Limpieza de Temp completada" "OK"
+        }
+    } catch { Write-Log "Error: $_" "ERROR" }
+    Write-Log "========== COMPLETADO ==========" "OK"
+}
+
+function Clear-AllUsersTemp {
+    Write-Log "========== LIMPIANDO TODOS LOS PERFILES ==========" "TASK"
+    Get-ChildItem "C:\Users" -Directory -EA 0 | ForEach-Object {
+        $userTemp = Join-Path $_.FullName "AppData\Local\Temp"
+        if (Test-Path $userTemp) {
+            Write-Log "Limpiando: $($_.Name)" "INFO"
+            Get-ChildItem $userTemp -Recurse -EA 0 | Where-Object { !$_.PSIsContainer } | Remove-Item -Force -EA 0
+        }
+    }
+    Write-Log "========== COMPLETADO ==========" "OK"
+}
+
+function Clear-WindowsTemp {
+    Write-Log "========== LIMPIANDO WINDOWS TEMP ==========" "TASK"
+    if (Test-Path "C:\Windows\Temp") {
+        Get-ChildItem "C:\Windows\Temp" -Recurse -EA 0 | Where-Object { !$_.PSIsContainer } | Remove-Item -Force -EA 0
+        Write-Log "Limpieza completada" "OK"
+    }
+    Write-Log "========== COMPLETADO ==========" "OK"
+}
+
+function Clear-InternetCache {
+    Write-Log "========== LIMPIANDO CACHE DE INTERNET ==========" "TASK"
+    $cachePaths = @(
+        "$env:LOCALAPPDATA\Microsoft\Windows\INetCache",
+        "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cache",
+        "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cache"
+    )
+    foreach ($path in $cachePaths) {
+        if (Test-Path $path) {
+            Write-Log "Limpiando: $path" "INFO"
+            Get-ChildItem $path -Recurse -EA 0 | Where-Object { !$_.PSIsContainer } | Remove-Item -Force -EA 0
+        }
+    }
+    Write-Log "========== COMPLETADO ==========" "OK"
+}
+
+function Run-DiskCleanup {
+    Write-Log "========== EJECUTANDO LIMPIEZA DE DISCO ==========" "TASK"
+    try {
+        if (Get-Command cleanmgr.exe -ErrorAction SilentlyContinue) {
+            cleanmgr.exe /sagerun:64 2>&1 | Out-Null
+            Write-Log "Limpieza de disco completada" "OK"
+        } else {
+            Write-Log "cleanmgr.exe no encontrado" "WARN"
+        }
+    } catch { Write-Log "Error: $_" "ERROR" }
+    Write-Log "========== COMPLETADO ==========" "OK"
+}
+
+function Disable-Firewall {
+    Write-Log "========== DESHABILITANDO FIREWALL ==========" "TASK"
+    netsh advfirewall set domainprofile state off | Out-Null
+    netsh advfirewall set privateprofile state off | Out-Null
+    netsh advfirewall set publicprofile state off | Out-Null
+    Write-Log "Firewall deshabilitado" "OK"
+    Write-Log "========== COMPLETADO ==========" "OK"
+}
+
+function Clear-WindowsUpdateCache {
+    Write-Log "========== LIMPIANDO CACHE DE WINDOWS UPDATE ==========" "TASK"
+    Write-Log "Deteniendo servicios..." "INFO"
+    net stop bits /y | Out-Null
+    net stop wuauserv /y | Out-Null
+    net stop cryptsvc /y | Out-Null
     
-    Write-Log "========== INSTALACION COMPLETADA ==========" "OK"
-    $global:InstallRunning = $false
+    Write-Log "Limpiando carpetas..." "INFO"
+    @("$env:SystemRoot\SoftwareDistribution", "$env:SystemRoot\system32\catroot2") | ForEach-Object {
+        if (Test-Path $_) { 
+            Remove-Item "$_\*" -Recurse -Force -EA 0
+            Write-Log "  Limpiado: $_" "OK"
+        }
+    }
+    
+    Write-Log "Reiniciando servicios..." "INFO"
+    net start bits | Out-Null
+    net start wuauserv | Out-Null
+    net start cryptsvc | Out-Null
+    Write-Log "========== COMPLETADO ==========" "OK"
+}
+
+function Invoke-FullCleanup {
+    Write-Log "========== LIMPIEZA COMPLETA ==========" "TASK"
+    Clear-CurrentUserTemp
+    Clear-AllUsersTemp
+    Clear-WindowsTemp
+    Clear-InternetCache
+    Run-DiskCleanup
+    Clear-WindowsUpdateCache
+    Write-Log "========== LIMPIEZA COMPLETA FINALIZADA ==========" "OK"
+}
+
+function Remove-AllBloatware {
+    Write-Log "========== ELIMINANDO BLOATWARE ==========" "TASK"
+    $removed = 0
+    Get-AppxPackage | Where-Object { $_.Name -match $global:BloatwareRegex } | ForEach-Object {
+        Remove-AppxPackage -Package $_ -EA 0
+        $removed++
+        Write-Log "  Eliminado: $($_.Name)" "OK"
+    }
+    Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -match $global:BloatwareRegex } | ForEach-Object {
+        Remove-AppxProvisionedPackage -Online -PackageName $_.PackageName -EA 0
+    }
+    
+    Write-Log "Aplicando optimizaciones de privacidad..." "INFO"
+    $tp = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection"
+    if (!(Test-Path $tp)) { New-Item $tp -Force | Out-Null }
+    Set-ItemProperty $tp -Name "AllowTelemetry" -Value 0 -EA 0
+    
+    $bp = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Search"
+    if (!(Test-Path $bp)) { New-Item $bp -Force | Out-Null }
+    Set-ItemProperty $bp -Name "BingSearchEnabled" -Value 0 -EA 0
+    
+    $cp = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search"
+    if (!(Test-Path $cp)) { New-Item $cp -Force | Out-Null }
+    Set-ItemProperty $cp -Name "AllowCortana" -Value 0 -EA 0
+    
+    if ($global:IsWindows11) {
+        $wp = "HKLM:\SOFTWARE\Policies\Microsoft\Dsh"
+        if (!(Test-Path $wp)) { New-Item $wp -Force | Out-Null }
+        Set-ItemProperty $wp -Name "AllowNewsAndInterests" -Value 0 -EA 0
+    }
+    if ($global:Is24H2) {
+        $rp = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System"
+        if (!(Test-Path $rp)) { New-Item $rp -Force | Out-Null }
+        Set-ItemProperty $rp -Name "EnableRecall" -Value 0 -EA 0
+    }
+    Write-Log "========== COMPLETADO: $removed apps eliminadas ==========" "OK"
+}
+
+function Disable-Copilot {
+    Write-Log "========== DESACTIVANDO COPILOT ==========" "TASK"
+    $removed = 0
+    
+    Write-Log "Eliminando paquetes de Copilot..." "INFO"
+    
+    # Eliminar Copilot de AppxPackage
+    $copilotPackages = Get-AppxPackage | Where-Object { 
+        $_.Name -match "Copilot|Microsoft.Windows.AI.Copilot|Microsoft.Copilot" 
+    }
+    foreach ($pkg in $copilotPackages) {
+        Remove-AppxPackage -Package $pkg -EA 0
+        $removed++
+        Write-Log "  Eliminado paquete: $($pkg.Name)" "OK"
+    }
+    
+    # Eliminar Copilot provisionado
+    $copilotProvisioned = Get-AppxProvisionedPackage -Online | Where-Object { 
+        $_.DisplayName -match "Copilot|Microsoft.Windows.AI.Copilot|Microsoft.Copilot" 
+    }
+    foreach ($pkg in $copilotProvisioned) {
+        Remove-AppxProvisionedPackage -Online -PackageName $pkg.PackageName -EA 0
+        $removed++
+        Write-Log "  Eliminado paquete provisionado: $($pkg.DisplayName)" "OK"
+    }
+    
+    Write-Log "Desactivando Copilot en el registro..." "INFO"
+    
+    # Desactivar Copilot en el registro
+    $copilotPaths = @(
+        "HKCU:\Software\Microsoft\Windows\CurrentVersion\Copilot",
+        "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot"
+    )
+    
+    foreach ($path in $copilotPaths) {
+        if (!(Test-Path $path)) { New-Item $path -Force | Out-Null }
+        Set-ItemProperty -Path $path -Name "TurnOffWindowsCopilot" -Value 1 -EA 0
+        Write-Log "  Desactivado en: $path" "OK"
+    }
+    
+    # Desactivar Copilot en el explorador
+    $explorerPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
+    if (!(Test-Path $explorerPath)) { New-Item $explorerPath -Force | Out-Null }
+    Set-ItemProperty -Path $explorerPath -Name "ShowCopilotButton" -Value 0 -EA 0
+    Write-Log "  Ocultado botón en explorador" "OK"
+    
+    Write-Log "Limpiando archivos temporales de Copilot..." "INFO"
+    $copilotCachePaths = @(
+        "$env:LOCALAPPDATA\Microsoft\Copilot",
+        "$env:APPDATA\Microsoft\Copilot"
+    )
+    foreach ($path in $copilotCachePaths) {
+        if (Test-Path $path) {
+            Remove-Item -Path $path -Recurse -Force -EA 0
+            Write-Log "  Eliminado: $path" "OK"
+        }
+    }
+    
+    Write-Log "Reiniciando explorador de archivos para aplicar cambios..." "INFO"
+    Stop-Process -Name explorer -Force -EA 0
+    Start-Sleep -Seconds 2
+    Start-Process explorer.exe
+    
+    Write-Log "========== COMPLETADO: $removed elementos de Copilot eliminados/desactivados ==========" "OK"
+}
+
+function Remove-OneDrive {
+    Write-Log "========== DESINSTALANDO ONEDRIVE ==========" "TASK"
+    try {
+        Get-Process "OneDrive*" -EA 0 | Stop-Process -Force
+        $uninstaller = "$env:SYSTEMROOT\SysWOW64\OneDriveSetup.exe"
+        if (!(Test-Path $uninstaller)) { $uninstaller = "$env:SYSTEMROOT\System32\OneDriveSetup.exe" }
+        if (Test-Path $uninstaller) {
+            Write-Log "Ejecutando desinstalador..." "INFO"
+            Start-Process $uninstaller "/uninstall" -NoNewWindow -Wait
+            Write-Log "OneDrive desinstalado" "OK"
+        } else { Write-Log "Desinstalador no encontrado" "WARN" }
+    } catch { Write-Log "Error: $_" "ERROR" }
+    Write-Log "========== COMPLETADO ==========" "OK"
+}
+
+function Install-OneDrive {
+    Write-Log "========== INSTALANDO ONEDRIVE ==========" "TASK"
+    $installer = "$global:DownloadDir\OneDriveSetup.exe"
+    try {
+        Write-Log "Descargando instalador..." "INFO"
+        Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/?linkid=844652" -OutFile $installer -UseBasicParsing
+        if ((Get-Item $installer -EA 0).Length -gt 1MB) {
+            Write-Log "Ejecutando instalador..." "INFO"
+            Start-Process $installer "/silent" -Wait
+            Write-Log "OneDrive instalado correctamente" "OK"
+        } else { throw "Archivo descargado no válido" }
+    } catch { Write-Log "Error: $_" "ERROR" }
+    finally { if (Test-Path $installer) { Remove-Item $installer -Force -EA 0 } }
+    Write-Log "========== COMPLETADO ==========" "OK"
 }
 
 function Install-Teams {
     Write-Log "========== INSTALANDO MICROSOFT TEAMS ==========" "TASK"
-    
     if (-not $global:WingetAvailable) { 
-        Write-Log "Winget no disponible. Abriendo pagina de descarga..." "WARN"
+        Write-Log "Winget no disponible. Abriendo página de descarga..." "WARN"
         Start-Process "https://www.microsoft.com/es-mx/microsoft-teams/download-app"
+        return
+    }
+    try {
+        winget install --id Microsoft.Teams --exact --accept-package-agreements --accept-source-agreements --silent
+        if ($LASTEXITCODE -eq 0) { Write-Log "Teams instalado correctamente" "OK" } 
+        else { Write-Log "Error en instalación. Código: $LASTEXITCODE" "WARN" }
+    } catch { Write-Log "Error: $_" "ERROR" }
+    Write-Log "========== COMPLETADO ==========" "OK"
+}
+
+function Install-Copilot {
+    Write-Log "========== INSTALANDO COPILOT ==========" "TASK"
+    
+    # Verificar si estamos en Windows 11
+    if (-not $global:IsWindows11) {
+        Write-Log "Copilot solo está disponible en Windows 11" "WARN"
+        Write-Log "Abriendo página web de Copilot..." "INFO"
+        Start-Process "https://copilot.microsoft.com/"
         return
     }
     
     try {
-        # Verificar si Teams ya está instalado
-        $teamsCheck = winget list --id Microsoft.Teams 2>&1
-        if ($teamsCheck -match "Microsoft.Teams") {
-            Write-Log "Teams ya está instalado" "OK"
-            return
-        }
-        
-        Write-Log "Instalando Teams via Winget..." "INFO"
-        $maxRetries = 3
-        $retryCount = 0
-        $success = $false
-        
-        while (-not $success -and $retryCount -lt $maxRetries) {
-            $retryCount++
-            Write-Log "  Intento $retryCount de $maxRetries..." "INFO"
-            
-            $process = Start-Process -FilePath "winget" -ArgumentList "install --id Microsoft.Teams --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity" -NoNewWindow -PassThru -Wait
-            
-            if ($process.ExitCode -eq 0) {
-                Write-Log "Teams instalado correctamente" "OK"
-                $success = $true
-            } elseif ($process.ExitCode -eq -1978335217) {
-                Write-Log "  Teams no encontrado en Winget" "WARN"
-                Write-Log "  Abriendo pagina de descarga..." "INFO"
-                Start-Process "https://www.microsoft.com/es-mx/microsoft-teams/download-app"
-                $success = $true # Marcar como true para no seguir reintentando
-            } else {
-                Write-Log "  Error instalando Teams. Codigo: $($process.ExitCode)" "WARN"
-            }
-            
-            if (-not $success -and $retryCount -lt $maxRetries) {
-                Write-Log "  Esperando 3 segundos antes de reintentar..." "INFO"
-                Start-Sleep -Seconds 3
+        Write-Log "Intentando instalar Copilot a través de Winget..." "INFO"
+        if ($global:WingetAvailable) {
+            winget install --id Microsoft.Copilot --exact --accept-package-agreements --accept-source-agreements --silent
+            if ($LASTEXITCODE -eq 0) { 
+                Write-Log "Copilot instalado correctamente" "OK"
+                Write-Log "Reiniciando explorador..." "INFO"
+                Stop-Process -Name explorer -Force -EA 0
+                Start-Sleep -Seconds 2
+                Start-Process explorer.exe
+                return
             }
         }
         
-        if (-not $success) {
-            Write-Log "No se pudo instalar Teams. Abriendo pagina de descarga..." "WARN"
-            Start-Process "https://www.microsoft.com/es-mx/microsoft-teams/download-app"
-        }
+        # Si winget falla, intentar desde la tienda de Microsoft
+        Write-Log "Intentando instalar desde Microsoft Store..." "INFO"
+        Start-Process "ms-windows-store://pdp/?productid=9N9K4M7VZP0C"
+        Write-Log "Se abrirá la tienda de Microsoft. Busca 'Copilot' y haz clic en instalar." "INFO"
+        
     } catch {
-        Write-Log "Error instalando Teams: $_" "ERROR"
-        Write-Log "Abriendo pagina de descarga manual..." "INFO"
-        Start-Process "https://www.microsoft.com/es-mx/microsoft-teams/download-app"
+        Write-Log "Error en la instalación: $_" "ERROR"
+        Write-Log "Abriendo página web de Copilot..." "INFO"
+        Start-Process "https://copilot.microsoft.com/"
     }
     
     Write-Log "========== COMPLETADO ==========" "OK"
 }
+
+function Install-SelectedApps {
+    param([string[]]$Apps)
+    if ($global:InstallRunning) { Write-Log "Ya hay una instalacion en curso" "WARN"; return }
+    $global:InstallRunning = $true
+    Write-Log "========== INSTALANDO APLICACIONES ==========" "TASK"
+    if (-not $global:WingetAvailable) { Write-Log "Winget no disponible" "WARN"; $global:InstallRunning = $false; return }
+    
+    foreach ($app in $Apps) {
+        Write-Log "Instalando: $app..." "INFO"
+        try {
+            switch ($app) {
+                "7zip" { winget install --id 7zip.7zip --silent --accept-package-agreements --accept-source-agreements }
+                "Chrome" { 
+                    # 1. Crear carpeta temporal
+                    $tempDir = "C:\ChromeTemp"
+                    New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
+
+                    # 2. Establecer variables de entorno para toda la sesión
+                    $env:TEMP = $tempDir
+                    $env:TMP = $tempDir
+
+                    # 3. Ejecutar winget con estas variables
+                    winget install --id Google.Chrome --silent --accept-package-agreements --accept-source-agreements
+
+                    # 4. Limpiar (opcional)
+                    Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue 
+                }
+                "Firefox" { winget install --id Mozilla.Firefox --silent --accept-package-agreements --accept-source-agreements }
+                "VLC" { winget install --id VideoLAN.VLC --silent --accept-package-agreements --accept-source-agreements }
+            }
+            if ($LASTEXITCODE -eq 0) { Write-Log "  Instalado: $app" "OK" } 
+            else { Write-Log "  Error instalando: $app (Código: $LASTEXITCODE)" "WARN" }
+        } catch { Write-Log "  Error: $_" "ERROR" }
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+    Write-Log "========== INSTALACION COMPLETADA ==========" "OK"
+    $global:InstallRunning = $false
+}
+
+function Optimize-System {
+    Write-Log "========== OPTIMIZANDO SISTEMA ==========" "TASK"
+    $pp = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile"
+    if (!(Test-Path $pp)) { New-Item $pp -Force | Out-Null }
+    Set-ItemProperty $pp -Name "SystemResponsiveness" -Value 10 -EA 0
+    @("SysMain", "WSearch") | ForEach-Object { 
+        Stop-Service $_ -Force -EA 0
+        Set-Service $_ -StartupType Disabled -EA 0
+        Write-Log "Servicio deshabilitado: $_" "OK"
+    }
+    powercfg -setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>&1 | Out-Null
+    Write-Log "Plan de alto rendimiento activado" "OK"
+    Write-Log "========== OPTIMIZACION COMPLETADA ==========" "OK"
+}
+
+function Repair-System {
+    Write-Log "========== REPARANDO SISTEMA ==========" "TASK"
+    
+    function Invoke-LongCommand {
+        param($Command, $Arguments, $StepName)
+        Write-Log "[$StepName] Ejecutando..." "INFO"
+        $process = Start-Process -FilePath $Command -ArgumentList $Arguments -NoNewWindow -PassThru
+        $elapsed = 0
+        while (-not $process.HasExited) {
+            Start-Sleep -Seconds 5
+            $elapsed += 5
+            Write-Log "[$StepName] En progreso... ($elapsed segundos)" "INFO"
+        }
+        $process.WaitForExit()
+        Write-Log "[$StepName] Completado. Código: $($process.ExitCode)" "OK"
+    }
+
+    Invoke-LongCommand "dism.exe" "/Online /Cleanup-Image /CheckHealth" "DISM CheckHealth"
+    Invoke-LongCommand "dism.exe" "/Online /Cleanup-Image /ScanHealth" "DISM ScanHealth"
+    Invoke-LongCommand "dism.exe" "/Online /Cleanup-Image /RestoreHealth" "DISM RestoreHealth"
+    Invoke-LongCommand "sfc.exe" "/scannow" "SFC Scannow"
+    Write-Log "========== REPARACION COMPLETADA ==========" "OK"
+}
+
+function Reset-WindowsUpdate {
+    Write-Log "========== REINICIANDO WINDOWS UPDATE ==========" "TASK"
+    Write-Log "Deteniendo servicios..." "INFO"
+    @("bits", "wuauserv", "appidsvc", "cryptsvc") | ForEach-Object { 
+        Stop-Service $_ -Force -EA 0
+        Write-Log "  $_ detenido" "OK"
+    }
+    Write-Log "Limpiando cache..." "INFO"
+    @("$env:SystemRoot\SoftwareDistribution", "$env:SystemRoot\system32\catroot2") | ForEach-Object { 
+        if (Test-Path $_) { 
+            Remove-Item "$_\*" -Recurse -Force -EA 0
+            Write-Log "  $_ limpiado" "OK"
+        }
+    }
+    Write-Log "Reiniciando servicios..." "INFO"
+    @("bits", "wuauserv", "appidsvc", "cryptsvc") | ForEach-Object { 
+        Start-Service $_ -EA 0
+        Write-Log "  $_ iniciado" "OK"
+    }
+    Write-Log "========== COMPLETADO ==========" "OK"
+}
+
+function Create-RestorePoint {
+    Write-Log "========== CREANDO PUNTO DE RESTAURACION ==========" "TASK"
+    try {
+        Checkpoint-Computer -Description "Windows Optimizer - Antes de cambios" -EA 0
+        Write-Log "Punto de restauracion creado exitosamente" "OK"
+    } catch { Write-Log "No se pudo crear punto de restauracion" "WARN" }
+    Write-Log "========== COMPLETADO ==========" "OK"
+}
+
+function Kill-HungProcesses {
+    Write-Log "========== TERMINANDO PROCESOS BLOQUEADOS ==========" "TASK"
+    if ($global:RepairTimer -ne $null) { $global:RepairTimer.Stop(); $global:RepairTimer.Dispose(); $global:RepairTimer = $null }
+    if ($global:CurrentJob -ne $null) { Stop-Job $global:CurrentJob -EA 0; Remove-Job $global:CurrentJob -Force -EA 0; $global:CurrentJob = $null; $global:RepairRunning = $false }
+    $procs = @("dism", "sfc", "TiWorker", "TrustedInstaller", "OneDriveSetup", "winget")
+    foreach ($proc in $procs) {
+        Get-Process -Name $proc -EA 0 | Stop-Process -Force -EA 0 | Out-Null
+        Write-Log "  Terminado: $proc" "OK"
+    }
+    Write-Log "========== COMPLETADO ==========" "OK"
+}
+#endregion
+
+#region [INTERFAZ GRAFICA]
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+[System.Windows.Forms.Application]::EnableVisualStyles()
+
+# Colores predefinidos
+$colorBg = [System.Drawing.Color]::FromArgb(45, 45, 48)
+$colorBtn = [System.Drawing.Color]::FromArgb(85, 85, 85)
+$colorBtnSpecial = [System.Drawing.Color]::FromArgb(51, 170, 51)
+$colorBtnKill = [System.Drawing.Color]::FromArgb(170, 102, 51)
+$colorBtnClose = [System.Drawing.Color]::FromArgb(170, 51, 51)
+$colorBtnFull = [System.Drawing.Color]::FromArgb(119, 119, 119)
+$colorBtnCopilot = [System.Drawing.Color]::FromArgb(0, 120, 200)  # Azul para Copilot
+$colorText = [System.Drawing.Color]::White
+$colorLog = [System.Drawing.Color]::LightGreen
+
+# Fuentes
+$fontTitle = New-Object System.Drawing.Font("Consolas", 9, [System.Drawing.FontStyle]::Bold)
+$fontNorm = New-Object System.Drawing.Font("Consolas", 8, [System.Drawing.FontStyle]::Regular)
+$fontSmall = New-Object System.Drawing.Font("Consolas", 7, [System.Drawing.FontStyle]::Regular)
+$fontItalic = New-Object System.Drawing.Font("Consolas", 7, [System.Drawing.FontStyle]::Italic)
+
+# Formulario
+$Form = New-Object System.Windows.Forms.Form
+$Form.ClientSize = New-Object System.Drawing.Point(520, 700)  # Aumentado para nuevo contenido
+$Form.StartPosition = 'CenterScreen'
+$Form.FormBorderStyle = 'FixedSingle'
+$Form.MinimizeBox = $false
+$Form.MaximizeBox = $false
+$Form.ShowIcon = $false
+$Form.Text = "Windows Optimizer v$global:ScriptVersion"
+$Form.BackColor = $colorBg
+
+$currentY = 5
+$btnWidth = 500
+
+# Helper para botones (CORREGIDO)
+function New-Button {
+    param($Text, $X, $Y, $Width, $Height, $Color, $ClickAction)
+    $btn = New-Object System.Windows.Forms.Button
+    $btn.Text = $Text
+    $btn.Location = New-Object System.Drawing.Point($X, $Y)
+    $btn.Size = New-Object System.Drawing.Size($Width, $Height)
+    $btn.FlatStyle = 'Flat'
+    $btn.Font = $fontNorm
+    $btn.ForeColor = $colorText
+    $btn.BackColor = $Color
+    $btn.Add_Click($ClickAction)
+    return $btn
+}
+
+# Panel Debloat (MODIFICADO - Ahora con 2 botones)
+$pnlDebloat = New-Object System.Windows.Forms.Panel
+$pnlDebloat.Size = New-Object System.Drawing.Size($btnWidth, 80)
+$pnlDebloat.Location = New-Object System.Drawing.Point(10, $currentY)
+$pnlDebloat.BackColor = $colorBg
+
+$lblDebloat = New-Object System.Windows.Forms.Label
+$lblDebloat.Text = "ELIMINAR BLOATWARE"
+$lblDebloat.Location = New-Object System.Drawing.Point(10, 3)
+$lblDebloat.Font = $fontTitle
+$lblDebloat.ForeColor = $colorText
+
+# Botón ELIMINAR BLOATWARE (mitad izquierda)
+$btnRemoveAll = New-Button "ELIMINAR BLOATWARE" 5 25 240 28 $colorBtn { Remove-AllBloatware }
+
+# Botón DESACTIVAR COPILOT (mitad derecha)
+$btnDisableCopilot = New-Button "DESACTIVAR COPILOT" 250 25 245 28 $colorBtnCopilot { Disable-Copilot }
+
+$btnRemoveOD = New-Button "DESINSTALAR ONEDRIVE" 5 56 490 25 $colorBtn { Remove-OneDrive }
+
+$pnlDebloat.Controls.AddRange(@($lblDebloat, $btnRemoveAll, $btnDisableCopilot, $btnRemoveOD))
+$currentY += 88
+
+# Panel Limpieza
+$pnlClean = New-Object System.Windows.Forms.Panel
+$pnlClean.Size = New-Object System.Drawing.Size($btnWidth, 125)
+$pnlClean.Location = New-Object System.Drawing.Point(10, $currentY)
+$pnlClean.BackColor = $colorBg
+
+$lblClean = New-Object System.Windows.Forms.Label
+$lblClean.Text = "LIMPIEZA DE ARCHIVOS"
+$lblClean.Location = New-Object System.Drawing.Point(10, 3)
+$lblClean.Font = $fontTitle
+$lblClean.ForeColor = $colorText
+
+$btnClearCurr = New-Button "PERFIL ACTUAL" 5 28 245 25 $colorBtn { Clear-CurrentUserTemp }
+$btnClearAll = New-Button "TODOS PERFILES" 255 28 245 25 $colorBtn { Clear-AllUsersTemp }
+$btnClearWinTemp = New-Button "WINDOWS TEMP" 5 58 245 25 $colorBtn { Clear-WindowsTemp }
+$btnClearCache = New-Button "CACHE INTERNET" 255 58 245 25 $colorBtn { Clear-InternetCache }
+$btnFullClean = New-Button "LIMPIEZA COMPLETA" 5 90 490 30 $colorBtnFull { Invoke-FullCleanup }
+
+$pnlClean.Controls.AddRange(@($lblClean, $btnClearCurr, $btnClearAll, $btnClearWinTemp, $btnClearCache, $btnFullClean))
+$currentY += 133
+
+# Panel Instalacion (MODIFICADO - Ahora con Copilot)
+$pnlInstall = New-Object System.Windows.Forms.Panel
+$pnlInstall.Size = New-Object System.Drawing.Size($btnWidth, 135)  # Aumentado para Copilot
+$pnlInstall.Location = New-Object System.Drawing.Point(10, $currentY)
+$pnlInstall.BackColor = $colorBg
+
+$lblInstall = New-Object System.Windows.Forms.Label
+$lblInstall.Text = "INSTALAR APLICACIONES"
+$lblInstall.Location = New-Object System.Drawing.Point(10, 3)
+$lblInstall.Font = $fontTitle
+$lblInstall.ForeColor = $colorText
+
+# Fila 1
+$chk7zip = New-Object System.Windows.Forms.CheckBox
+$chk7zip.Text = "7-Zip"; $chk7zip.Location = New-Object System.Drawing.Point(10, 25); $chk7zip.Font = $fontNorm; $chk7zip.ForeColor = $colorText
+$chkChrome = New-Object System.Windows.Forms.CheckBox
+$chkChrome.Text = "Chrome"; $chkChrome.Location = New-Object System.Drawing.Point(125, 25); $chkChrome.Font = $fontNorm; $chkChrome.ForeColor = $colorText
+$chkFirefox = New-Object System.Windows.Forms.CheckBox
+$chkFirefox.Text = "Firefox"; $chkFirefox.Location = New-Object System.Drawing.Point(220, 25); $chkFirefox.Font = $fontNorm; $chkFirefox.ForeColor = $colorText
+$chkVLC = New-Object System.Windows.Forms.CheckBox
+$chkVLC.Text = "VLC"; $chkVLC.Location = New-Object System.Drawing.Point(330, 25); $chkVLC.Font = $fontNorm; $chkVLC.ForeColor = $colorText
+
+# Fila 2
+$chkOneDrive = New-Object System.Windows.Forms.CheckBox
+$chkOneDrive.Text = "OneDrive"; $chkOneDrive.Location = New-Object System.Drawing.Point(10, 50); $chkOneDrive.Font = $fontNorm; $chkOneDrive.ForeColor = $colorText
+$chkTeams = New-Object System.Windows.Forms.CheckBox
+$chkTeams.Text = "Teams"; $chkTeams.Location = New-Object System.Drawing.Point(120, 50); $chkTeams.Font = $fontNorm; $chkTeams.ForeColor = $colorText
+$chkCopilot = New-Object System.Windows.Forms.CheckBox  # NUEVO: Casilla para Copilot
+$chkCopilot.Text = "Copilot"; $chkCopilot.Location = New-Object System.Drawing.Point(230, 50); $chkCopilot.Font = $fontNorm; $chkCopilot.ForeColor = $colorText
+
+$btnInstall = New-Button "INSTALAR SELECCIONADAS" 5 75 490 30 $colorBtnSpecial {
+    if ($global:InstallRunning) { Write-Log "Ya hay una instalacion en curso" "WARN"; return }
+    $apps = @()
+    if ($chk7zip.Checked) { $apps += "7zip" }
+    if ($chkChrome.Checked) { $apps += "Chrome" }
+    if ($chkFirefox.Checked) { $apps += "Firefox" }
+    if ($chkVLC.Checked) { $apps += "VLC" }
+    
+    # Instalar aplicaciones comunes
+    if ($apps.Count -gt 0) { Install-SelectedApps -Apps $apps }
+    
+    # Instalar OneDrive si está seleccionado
+    if ($chkOneDrive.Checked) { Install-OneDrive }
+    
+    # Instalar Teams si está seleccionado
+    if ($chkTeams.Checked) { Install-Teams }
+    
+    # Instalar Copilot si está seleccionado
+    if ($chkCopilot.Checked) { Install-Copilot }
+    
+    # Limpiar checkboxes
+    $chk7zip.Checked = $false; $chkChrome.Checked = $false
+    $chkFirefox.Checked = $false; $chkVLC.Checked = $false
+    $chkOneDrive.Checked = $false; $chkTeams.Checked = $false
+    $chkCopilot.Checked = $false
+}
+
+$pnlInstall.Controls.AddRange(@($lblInstall, $chk7zip, $chkChrome, $chkFirefox, $chkVLC, $chkOneDrive, $chkTeams, $chkCopilot, $btnInstall))
+$currentY += 143
+
+# Panel Herramientas
+$pnlTools = New-Object System.Windows.Forms.Panel
+$pnlTools.Size = New-Object System.Drawing.Size($btnWidth, 80)
+$pnlTools.Location = New-Object System.Drawing.Point(10, $currentY)
+$pnlTools.BackColor = $colorBg
+
+$lblTools = New-Object System.Windows.Forms.Label
+$lblTools.Text = "HERRAMIENTAS"
+$lblTools.Location = New-Object System.Drawing.Point(10, 3)
+$lblTools.Font = $fontTitle
+$lblTools.ForeColor = $colorText
+
+$btnOptimize = New-Button "OPTIMIZAR" 5 28 115 28 $colorBtn { Optimize-System }
+$btnRepair = New-Button "REPARAR" 125 28 115 28 $colorBtn { Repair-System }
+$btnResetWU = New-Button "RESET WU" 245 28 115 28 $colorBtn { Reset-WindowsUpdate }
+$btnRestore = New-Button "PTO RESTAURACION" 365 28 115 28 $colorBtn { Create-RestorePoint }
+
+$pnlTools.Controls.AddRange(@($lblTools, $btnOptimize, $btnRepair, $btnResetWU, $btnRestore))
+$currentY += 88
+
+# Panel Control
+$pnlControl = New-Object System.Windows.Forms.Panel
+$pnlControl.Size = New-Object System.Drawing.Size($btnWidth, 45)
+$pnlControl.Location = New-Object System.Drawing.Point(10, $currentY)
+$pnlControl.BackColor = $colorBg
+
+$btnKill = New-Button "TERMINAR PROCESOS BLOQUEADOS" 5 8 490 30 $colorBtnKill { Kill-HungProcesses }
+$pnlControl.Controls.Add($btnKill)
+$currentY += 53
+
+# Creditos
+$lblCredit = New-Object System.Windows.Forms.Label
+$lblCredit.Text = "Creado con DeepSeek por CFRG, con cariño - V1.3"
+$lblCredit.Location = New-Object System.Drawing.Point(10, $currentY)
+$lblCredit.Size = New-Object System.Drawing.Size($btnWidth, 14)
+$lblCredit.Font = $fontItalic
+$lblCredit.ForeColor = [System.Drawing.Color]::FromArgb(136, 136, 136)
+$lblCredit.TextAlign = 'MiddleCenter'
+$currentY += 18
+
+# Boton Cerrar
+$btnClose = New-Button "CERRAR PROGRAMA" 10 $currentY 490 30 $colorBtnClose { $Form.Close() }
+$currentY += 40
+
+# Panel de Log
+$lblLog = New-Object System.Windows.Forms.Label
+$lblLog.Text = "REGISTRO DE ACTIVIDAD"
+$lblLog.Location = New-Object System.Drawing.Point(10, $currentY)
+$lblLog.Size = New-Object System.Drawing.Size($btnWidth, 14)
+$lblLog.Font = $fontTitle
+$lblLog.ForeColor = $colorText
+$currentY += 18
+
+$global:LogTextBox = New-Object System.Windows.Forms.RichTextBox
+$global:LogTextBox.Location = New-Object System.Drawing.Point(10, $currentY)
+$global:LogTextBox.Size = New-Object System.Drawing.Size($btnWidth, 85)
+$global:LogTextBox.BackColor = [System.Drawing.Color]::FromArgb(30, 30, 30)
+$global:LogTextBox.ForeColor = $colorLog
+$global:LogTextBox.Font = $fontSmall
+$global:LogTextBox.ReadOnly = $true
+$global:LogTextBox.ScrollBars = 'Vertical'
+
+$Form.Controls.AddRange(@($pnlDebloat, $pnlClean, $pnlInstall, $pnlTools, $pnlControl, $lblCredit, $btnClose, $lblLog, $global:LogTextBox))
+
+# Timer para actualizar UI
+$timer = New-Object System.Windows.Forms.Timer
+$timer.Interval = 500
+$timer.Add_Tick({
+    if ($global:LogTextBox -and !$global:LogTextBox.IsDisposed -and (Test-Path $global:LogFile)) {
+        $global:LogTextBox.Text = Get-Content -Path $global:LogFile -ErrorAction SilentlyContinue | Out-String
+        $global:LogTextBox.SelectionStart = $global:LogTextBox.Text.Length
+        $global:LogTextBox.ScrollToCaret()
+    }
+})
+$timer.Start()
+
+# Mensaje inicial
+Write-Log "=========================================" "INFO"
+Write-Log "Windows Optimizer v$global:ScriptVersion" "INFO"
+Write-Log "Sistema: $global:WindowsVersion" "INFO"
+Write-Log "Creado por CFRG, el negrito del ritmo" "INFO"
+Write-Log "=========================================" "INFO"
+Write-Log "Listo - Selecciona una opcion" "INFO"
+Write-Log "=========================================" "INFO"
+
+[void]$Form.ShowDialog()
+$timer.Stop()
+#endregion
