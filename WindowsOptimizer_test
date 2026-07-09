@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Windows 10/11 Optimizer & Debloater GUI v7.1 - UNC Compatible
+    Windows 10/11 Optimizer & Debloater GUI v7.2 - UNC Compatible
 .DESCRIPTION
     Herramienta completa para optimizar Windows 10/11 (todas las versiones)
     Compatible con ejecucion desde rutas UNC (red)
@@ -11,7 +11,7 @@
 
 #region [INICIALIZACION CON ELEVACION - COMPATIBLE CON UNC]
 $ErrorActionPreference = 'Continue'
-$global:ScriptVersion = "7.1"
+$global:ScriptVersion = "7.2"
 
 # Función para auto-elevarse (funciona con rutas UNC)
 function Test-AdminElevation {
@@ -49,9 +49,10 @@ function Test-AdminElevation {
     return $true
 }
 
+# Ejecutar elevación
 Test-AdminElevation
 
-# Detectar version de Windows (MEJORADO)
+# Detectar version de Windows
 $global:WindowsVersion = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion").ProductName
 $global:WindowsBuild = [Environment]::OSVersion.Version.Build
 $global:IsWindows11 = $global:WindowsBuild -ge 22000
@@ -108,7 +109,7 @@ $global:Bloatware = @(
     "Microsoft.Advertising.Xaml", "Microsoft.MSPaint", "Microsoft.Todos", "Microsoft.PowerAutomateDesktop",
     "Microsoft.Windows.DevHome", "Microsoft.Windows.Photos", "Microsoft.Windows.ScreenSketch",
     "Microsoft.WindowsSoundRecorder", "Microsoft.OutlookForWindows", "Microsoft.Clipchamp.Clipchamp",
-    "Microsoft.Office.Todo", "Microsoft.People", "Microsoft.Windows.CloudExperienceHost",
+    "Microsoft.Office.Todo", "Microsoft.Windows.CloudExperienceHost",
     "Microsoft.Windows.SecHealthUI", "Microsoft.WindowsCamera", "Microsoft.WindowsCalculator"
 )
 
@@ -123,20 +124,9 @@ if ($global:IsWindows11) {
 }
 
 $global:BloatwareRegex = $global:Bloatware -join '|'
-
-# Lista específica para Copilot (solo en Windows 11)
-$global:CopilotPackages = @()
-if ($global:IsWindows11) {
-    $global:CopilotPackages = @(
-        "Microsoft.Copilot",
-        "Microsoft.Windows.AI.Copilot",
-        "Microsoft.Windows.AI",
-        "Microsoft.Copilot.DevHome"
-    )
-}
 #endregion
 
-#region [FUNCIONES DE LIMPIEZA - COMPLETAS]
+#region [FUNCIONES DE LIMPIEZA]
 function Clear-CurrentUserTemp {
     Write-Log "========== LIMPIANDO PERFIL ACTUAL ==========" "TASK"
     try {
@@ -172,10 +162,8 @@ function Clear-WindowsTemp {
 function Clear-InternetCache {
     Write-Log "========== LIMPIANDO CACHE DE INTERNET ==========" "TASK"
     
-    # Limpiar cache de Internet Explorer (métodos RunDll32)
     Write-Log "Limpiando cache de Internet Explorer..." "INFO"
     try {
-        # ClearMyTracksByProcess 8 = Eliminar todo (historial, cookies, cache, etc.)
         Start-Process -FilePath "RunDll32.exe" -ArgumentList "InetCpl.cpl,ClearMyTracksByProcess 8" -NoNewWindow -Wait
         Write-Log "  ✓ Cache de IE eliminada (completo)" "OK"
         
@@ -191,12 +179,10 @@ function Clear-InternetCache {
         Write-Log "  ✗ Error limpiando cache de IE" "WARN"
     }
     
-    # Limpiar cache de navegadores modernos
     $cachePaths = @(
         "$env:LOCALAPPDATA\Microsoft\Windows\INetCache",
         "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cache",
-        "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cache",
-        "$env:APPDATA\Mozilla\Firefox\Profiles\*\cache2"
+        "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cache"
     )
     foreach ($path in $cachePaths) {
         if (Test-Path $path) {
@@ -211,7 +197,6 @@ function Run-DiskCleanup {
     Write-Log "========== EJECUTANDO LIMPIEZA DE DISCO ==========" "TASK"
     try {
         if (Get-Command cleanmgr.exe -ErrorAction SilentlyContinue) {
-            Write-Log "Ejecutando Cleanmgr /sagerun:64..." "INFO"
             cleanmgr.exe /sagerun:64 2>&1 | Out-Null
             Write-Log "  ✓ Limpieza de disco completada" "OK"
         } else {
@@ -225,12 +210,9 @@ function Disable-Firewall {
     Write-Log "========== DESHABILITANDO FIREWALL ==========" "TASK"
     try {
         netsh advfirewall set domainprofile state off | Out-Null
-        Write-Log "  ✓ Dominio desactivado" "OK"
         netsh advfirewall set privateprofile state off | Out-Null
-        Write-Log "  ✓ Privado desactivado" "OK"
         netsh advfirewall set publicprofile state off | Out-Null
-        Write-Log "  ✓ Público desactivado" "OK"
-        Write-Log "Firewall deshabilitado completamente" "OK"
+        Write-Log "  ✓ Firewall deshabilitado completamente" "OK"
     } catch {
         Write-Log "Error deshabilitando firewall: $_" "ERROR"
     }
@@ -326,7 +308,7 @@ function Invoke-FullCleanup {
 }
 #endregion
 
-#region [FUNCIONES DE DEBLOAT - CORREGIDAS]
+#region [FUNCIONES DE DEBLOAT]
 function Remove-AllBloatware {
     Write-Log "========== ELIMINANDO BLOATWARE ==========" "TASK"
     $removed = 0
@@ -358,21 +340,7 @@ function Remove-AllBloatware {
         }
     }
     
-    Write-Log "Paso 3: Eliminando paquetes del sistema..." "INFO"
-    $systemPackages = Get-AppxProvisionedPackage -Online | Where-Object { 
-        $_.DisplayName -match "Bing|Weather|GetHelp|3DViewer|OfficeHub|Solitaire|MixedReality|OneNote|Skype|Xbox|Zune|CandyCrush|Camera|Calculator"
-    }
-    foreach ($pkg in $systemPackages) {
-        try {
-            Remove-AppxProvisionedPackage -Online -PackageName $pkg.PackageName -EA 0
-            $removed++
-            Write-Log "  ✓ Eliminado sistema: $($pkg.DisplayName)" "OK"
-        } catch {
-            Write-Log "  ✗ No se pudo eliminar: $($pkg.DisplayName)" "WARN"
-        }
-    }
-    
-    Write-Log "Paso 4: Desactivando telemetría y privacidad..." "INFO"
+    Write-Log "Paso 3: Desactivando telemetría y privacidad..." "INFO"
     $tp = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection"
     if (!(Test-Path $tp)) { New-Item $tp -Force | Out-Null }
     Set-ItemProperty $tp -Name "AllowTelemetry" -Value 0 -EA 0
@@ -403,13 +371,11 @@ function Remove-AllBloatware {
     }
     
     Write-Log "========== COMPLETADO: $removed apps eliminadas, $failed fallidas ==========" "OK"
-    Write-Log "Se recomienda reiniciar el sistema para aplicar todos los cambios." "INFO"
 }
 
 function Disable-Copilot {
     Write-Log "========== DESACTIVANDO COPILOT ==========" "TASK"
     
-    # Verificar si es Windows 11
     if (-not $global:IsWindows11) {
         Write-Log "Copilot solo existe en Windows 11. No hay nada que desactivar." "WARN"
         Write-Log "========== COMPLETADO ==========" "OK"
@@ -453,21 +419,7 @@ function Disable-Copilot {
         }
     }
     
-    Write-Log "Paso 4: Eliminando con DISM los paquetes de Copilot..." "INFO"
-    $dismPackages = Get-AppxProvisionedPackage -Online | Where-Object { 
-        $_.PackageName -match "Copilot|Windows.AI.Copilot" 
-    }
-    foreach ($pkg in $dismPackages) {
-        try {
-            Remove-AppxProvisionedPackage -Online -PackageName $pkg.PackageName -EA 0
-            $removed++
-            Write-Log "  ✓ Eliminado con DISM: $($pkg.DisplayName)" "OK"
-        } catch {
-            Write-Log "  ✗ No se pudo eliminar con DISM: $($pkg.DisplayName)" "WARN"
-        }
-    }
-    
-    Write-Log "Paso 5: Desactivando Copilot en el registro..." "INFO"
+    Write-Log "Paso 4: Desactivando Copilot en el registro..." "INFO"
     $copilotRegPaths = @(
         @{Path="HKCU:\Software\Microsoft\Windows\CurrentVersion\Copilot"; Name="TurnOffWindowsCopilot"; Value=1},
         @{Path="HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot"; Name="TurnOffWindowsCopilot"; Value=1},
@@ -484,7 +436,7 @@ function Disable-Copilot {
         }
     }
     
-    Write-Log "Paso 6: Limpiando archivos de Copilot..." "INFO"
+    Write-Log "Paso 5: Limpiando archivos de Copilot..." "INFO"
     $copilotPaths = @(
         "$env:LOCALAPPDATA\Microsoft\Copilot",
         "$env:APPDATA\Microsoft\Copilot",
@@ -502,21 +454,7 @@ function Disable-Copilot {
         }
     }
     
-    Write-Log "Paso 7: Desactivando Copilot en la barra de tareas..." "INFO"
-    try {
-        $taskbarPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot"
-        if (!(Test-Path $taskbarPath)) { New-Item $taskbarPath -Force | Out-Null }
-        Set-ItemProperty -Path $taskbarPath -Name "TurnOffWindowsCopilot" -Value 1 -EA 0
-        
-        $explorerPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer"
-        if (!(Test-Path $explorerPath)) { New-Item $explorerPath -Force | Out-Null }
-        Set-ItemProperty -Path $explorerPath -Name "DisableCopilot" -Value 1 -EA 0
-        Write-Log "  ✓ Copilot desactivado en la barra de tareas" "OK"
-    } catch {
-        Write-Log "  ✗ Error al desactivar en barra de tareas" "WARN"
-    }
-    
-    Write-Log "Paso 8: Reiniciando explorador para aplicar cambios..." "INFO"
+    Write-Log "Paso 6: Reiniciando explorador para aplicar cambios..." "INFO"
     try {
         Stop-Process -Name explorer -Force -EA 0
         Start-Sleep -Seconds 3
@@ -581,7 +519,6 @@ function Install-Teams {
 function Install-Copilot {
     Write-Log "========== INSTALANDO COPILOT ==========" "TASK"
     
-    # Verificar si es Windows 11
     if (-not $global:IsWindows11) {
         Write-Log "Copilot solo está disponible en Windows 11" "WARN"
         Write-Log "Abriendo página web de Copilot..." "INFO"
@@ -686,9 +623,6 @@ function Optimize-System {
         Write-Log "  ✓ Plan de alto rendimiento activado" "OK"
     } catch {
         Write-Log "  ✗ Error activando plan de alto rendimiento" "WARN"
-        # Intentar con el plan equilibrado como alternativa
-        powercfg -setactive 381b4222-f694-41f0-9685-ff5bb260df2e 2>&1 | Out-Null
-        Write-Log "  ✓ Plan equilibrado activado (alternativa)" "OK"
     }
     
     Write-Log "========== OPTIMIZACION COMPLETADA ==========" "OK"
@@ -871,7 +805,6 @@ $lblInstall.Location = New-Object System.Drawing.Point(10, 3)
 $lblInstall.Font = $fontTitle
 $lblInstall.ForeColor = $colorText
 
-# Fila 1
 $chk7zip = New-Object System.Windows.Forms.CheckBox
 $chk7zip.Text = "7-Zip"; $chk7zip.Location = New-Object System.Drawing.Point(10, 25); $chk7zip.Font = $fontNorm; $chk7zip.ForeColor = $colorText
 $chkChrome = New-Object System.Windows.Forms.CheckBox
@@ -881,7 +814,6 @@ $chkFirefox.Text = "Firefox"; $chkFirefox.Location = New-Object System.Drawing.P
 $chkVLC = New-Object System.Windows.Forms.CheckBox
 $chkVLC.Text = "VLC"; $chkVLC.Location = New-Object System.Drawing.Point(330, 25); $chkVLC.Font = $fontNorm; $chkVLC.ForeColor = $colorText
 
-# Fila 2
 $chkOneDrive = New-Object System.Windows.Forms.CheckBox
 $chkOneDrive.Text = "OneDrive"; $chkOneDrive.Location = New-Object System.Drawing.Point(10, 50); $chkOneDrive.Font = $fontNorm; $chkOneDrive.ForeColor = $colorText
 $chkTeams = New-Object System.Windows.Forms.CheckBox
@@ -943,7 +875,7 @@ $currentY += 53
 
 # Creditos
 $lblCredit = New-Object System.Windows.Forms.Label
-$lblCredit.Text = "Creado con DeepSeek por CFRG, con cariño - V7.1"
+$lblCredit.Text = "Creado con DeepSeek por CFRG, con cariño - V7.2"
 $lblCredit.Location = New-Object System.Drawing.Point(10, $currentY)
 $lblCredit.Size = New-Object System.Drawing.Size($btnWidth, 14)
 $lblCredit.Font = $fontItalic
