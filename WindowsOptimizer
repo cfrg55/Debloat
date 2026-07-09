@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Windows Optimizer v7.5 - Version Estable
+    Windows Optimizer v7.6 - Version Estable
 .DESCRIPTION
     Herramienta para optimizar Windows 10/11
 .NOTES
@@ -9,7 +9,7 @@
 
 #region [ELEVACION]
 $ErrorActionPreference = 'Continue'
-$global:ScriptVersion = "7.5"
+$global:ScriptVersion = "7.6"
 
 function Test-AdminElevation {
     $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -31,6 +31,25 @@ function Test-AdminElevation {
 }
 
 Test-AdminElevation
+
+# OBTENER EL USUARIO ORIGINAL (el que ejecutó el script, no el administrador)
+$global:OriginalUser = $env:USERNAME
+$global:OriginalUserProfile = $env:USERPROFILE
+
+# Si estamos ejecutando como administrador, obtener el usuario original
+if ($global:OriginalUser -eq "Administrator" -or $global:OriginalUser -eq "SYSTEM") {
+    # Intentar obtener el usuario que realmente inició la sesión
+    try {
+        $session = Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object -ExpandProperty UserName
+        if ($session) {
+            $global:OriginalUser = $session.Split('\')[1]
+            $global:OriginalUserProfile = "C:\Users\$global:OriginalUser"
+            Write-Log "Usuario original detectado: $global:OriginalUser" "INFO"
+        }
+    } catch {
+        Write-Log "No se pudo detectar el usuario original, usando: $global:OriginalUser" "WARN"
+    }
+}
 
 # Detectar version de Windows
 $global:WindowsVersion = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion").ProductName
@@ -62,14 +81,20 @@ function Write-Log {
 }
 #endregion
 
-#region [FUNCIONES DE LIMPIEZA - CORREGIDAS]
+#region [FUNCIONES DE LIMPIEZA - CORREGIDAS CON USUARIO ORIGINAL]
 function Clear-CurrentUserTemp {
     Write-Log "========== LIMPIANDO PERFIL ACTUAL ==========" "TASK"
-    $deleted = 0
-    try {
-        if (Test-Path "$env:TEMP") {
-            Write-Log "Ruta: $env:TEMP" "INFO"
-            $items = Get-ChildItem "$env:TEMP" -Recurse -Force -EA 0
+    
+    # Usar el perfil del usuario original, no el del administrador
+    $userTemp = "$global:OriginalUserProfile\AppData\Local\Temp"
+    
+    if (Test-Path $userTemp) {
+        Write-Log "Limpiando: $userTemp" "INFO"
+        Write-Log "Usuario: $global:OriginalUser" "INFO"
+        
+        $deleted = 0
+        try {
+            $items = Get-ChildItem $userTemp -Recurse -Force -EA 0
             foreach ($item in $items) {
                 try {
                     Remove-Item -Path $item.FullName -Force -Recurse -EA 0
@@ -79,11 +104,33 @@ function Clear-CurrentUserTemp {
                 }
             }
             Write-Log "Archivos eliminados: $deleted" "OK"
-        } else {
-            Write-Log "Ruta no encontrada: $env:TEMP" "WARN"
+        } catch {
+            Write-Log "Error: $_" "ERROR"
         }
-    } catch {
-        Write-Log "Error: $_" "ERROR"
+    } else {
+        Write-Log "Ruta no encontrada: $userTemp" "WARN"
+        Write-Log "Intentando con ruta alternativa..." "INFO"
+        
+        # Intentar con la variable de entorno TEMP del usuario
+        $altTemp = "$env:SystemDrive\Users\$global:OriginalUser\AppData\Local\Temp"
+        if (Test-Path $altTemp) {
+            Write-Log "Usando ruta alternativa: $altTemp" "INFO"
+            $deleted = 0
+            try {
+                $items = Get-ChildItem $altTemp -Recurse -Force -EA 0
+                foreach ($item in $items) {
+                    try {
+                        Remove-Item -Path $item.FullName -Force -Recurse -EA 0
+                        $deleted++
+                    } catch {
+                        # Si no se puede eliminar, continuar
+                    }
+                }
+                Write-Log "Archivos eliminados: $deleted" "OK"
+            } catch {
+                Write-Log "Error: $_" "ERROR"
+            }
+        }
     }
     Write-Log "========== COMPLETADO ==========" "OK"
 }
@@ -142,10 +189,11 @@ function Clear-InternetCache {
         Write-Log "  Error limpiando cache de IE" "WARN"
     }
     
+    # Limpiar cache del usuario original
     $cachePaths = @(
-        "$env:LOCALAPPDATA\Microsoft\Windows\INetCache",
-        "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cache",
-        "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cache"
+        "$global:OriginalUserProfile\AppData\Local\Microsoft\Windows\INetCache",
+        "$global:OriginalUserProfile\AppData\Local\Microsoft\Edge\User Data\Default\Cache",
+        "$global:OriginalUserProfile\AppData\Local\Google\Chrome\User Data\Default\Cache"
     )
     foreach ($path in $cachePaths) {
         if (Test-Path $path) {
@@ -593,7 +641,7 @@ $btnRemoveOD = New-Button "DESINSTALAR ONEDRIVE" 5 55 240 26 $colorBtnOneDrive {
 $pnlDebloat.Controls.AddRange(@($lblDebloat, $btnRemoveAll, $btnDisableCopilot, $btnRemoveOD))
 $currentY += 100
 
-# Panel Limpieza - REDUCIDO
+# Panel Limpieza
 $pnlClean = New-Object System.Windows.Forms.Panel
 $pnlClean.Size = New-Object System.Drawing.Size($btnWidth, 110)
 $pnlClean.Location = New-Object System.Drawing.Point(10, $currentY)
@@ -616,7 +664,7 @@ $btnFullClean = New-Button "LIMPIEZA COMPLETA" 5 81 490 26 $colorBtnFull { Invok
 $pnlClean.Controls.AddRange(@($lblClean, $btnClearCurr, $btnClearAll, $btnClearWinTemp, $btnClearCache, $btnFullClean))
 $currentY += 115
 
-# Panel Instalacion - CON CASILLA DE COPILOT (REDUCIDO)
+# Panel Instalacion
 $pnlInstall = New-Object System.Windows.Forms.Panel
 $pnlInstall.Size = New-Object System.Drawing.Size($btnWidth, 145)
 $pnlInstall.Location = New-Object System.Drawing.Point(10, $currentY)
@@ -705,7 +753,7 @@ $pnlInstall.Controls.AddRange(@(
 ))
 $currentY += 150
 
-# Panel Herramientas - REDUCIDO
+# Panel Herramientas
 $pnlTools = New-Object System.Windows.Forms.Panel
 $pnlTools.Size = New-Object System.Drawing.Size($btnWidth, 65)
 $pnlTools.Location = New-Object System.Drawing.Point(10, $currentY)
@@ -780,7 +828,7 @@ $btnRestore = New-Button "PTO RESTAURACION" 365 25 115 26 $colorBtn { Create-Res
 $pnlTools.Controls.AddRange(@($lblTools, $btnOptimize, $btnRepair, $btnResetWU, $btnRestore))
 $currentY += 70
 
-# Panel Control - REDUCIDO
+# Panel Control
 $pnlControl = New-Object System.Windows.Forms.Panel
 $pnlControl.Size = New-Object System.Drawing.Size($btnWidth, 40)
 $pnlControl.Location = New-Object System.Drawing.Point(10, $currentY)
@@ -790,9 +838,9 @@ $btnKill = New-Button "TERMINAR PROCESOS BLOQUEADOS" 5 8 490 26 $colorBtn { Kill
 $pnlControl.Controls.Add($btnKill)
 $currentY += 45
 
-# Creditos - MOVIDO MÁS ARRIBA
+# Creditos
 $lblCredit = New-Object System.Windows.Forms.Label
-$lblCredit.Text = "Creado por CFRG - V7.5"
+$lblCredit.Text = "Creado por CFRG - V7.6"
 $lblCredit.Location = New-Object System.Drawing.Point(10, $currentY)
 $lblCredit.Size = New-Object System.Drawing.Size($btnWidth, 14)
 $lblCredit.Font = $fontItalic
@@ -800,11 +848,11 @@ $lblCredit.ForeColor = [System.Drawing.Color]::FromArgb(136, 136, 136)
 $lblCredit.TextAlign = 'MiddleCenter'
 $currentY += 16
 
-# Boton Cerrar - REDUCIDO
+# Boton Cerrar
 $btnClose = New-Button "CERRAR PROGRAMA" 10 $currentY 490 28 $colorBtnClose { $Form.Close() }
 $currentY += 32
 
-# Panel de Log - CON MÁS ESPACIO Y REDUCIDO EN VERTICAL
+# Panel de Log
 $lblLog = New-Object System.Windows.Forms.Label
 $lblLog.Text = "REGISTRO DE ACTIVIDAD"
 $lblLog.Location = New-Object System.Drawing.Point(10, $currentY)
@@ -840,6 +888,7 @@ $timer.Start()
 Write-Log "=========================================" "INFO"
 Write-Log "Windows Optimizer v$global:ScriptVersion" "INFO"
 Write-Log "Sistema: $global:WindowsVersion (Build $global:WindowsBuild)" "INFO"
+Write-Log "Usuario: $global:OriginalUser" "INFO"
 Write-Log "=========================================" "INFO"
 Write-Log "Listo - Selecciona una opcion" "INFO"
 Write-Log "=========================================" "INFO"
