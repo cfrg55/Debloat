@@ -1,15 +1,49 @@
 <#
 .SYNOPSIS
-    Windows Optimizer v7.6 - Version Estable
+    Windows Optimizer v8.8 - Version Estable
 .DESCRIPTION
     Herramienta para optimizar Windows 10/11
 .NOTES
     Requiere: Ejecutar como Administrador
 #>
 
-#region [ELEVACION]
 $ErrorActionPreference = 'Continue'
-$global:ScriptVersion = "7.6"
+$global:ScriptVersion = "8.8"
+
+# =============================================
+# CAPTURAR USUARIO ORIGINAL ANTES DE LA ELEVACION
+# =============================================
+# Esta sección SOLO se ejecuta si NO estamos elevados
+$currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+$isAdmin = $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+# SOLO capturar si NO somos administradores (ejecución inicial)
+if (-not $isAdmin) {
+    $global:OriginalUser = $env:USERNAME
+    $global:OriginalUserProfile = $env:USERPROFILE
+    
+    # Crear directorio para archivos de configuración (ruta fija)
+    $global:ConfigDir = "C:\Temp\WindowsOptimizer"
+    $global:UserConfigFile = "$global:ConfigDir\user_config.txt"
+    
+    # Crear el directorio si no existe
+    if (!(Test-Path $global:ConfigDir)) {
+        New-Item -Path $global:ConfigDir -ItemType Directory -Force | Out-Null
+    }
+    
+    # Guardar configuración del usuario en C:\Temp (ruta fija)
+    @"
+OriginalUser=$global:OriginalUser
+OriginalUserProfile=$global:OriginalUserProfile
+"@ | Out-File -FilePath $global:UserConfigFile -Encoding UTF8 -Force
+    
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "CONFIGURACION GUARDADA (ANTES DE ELEVAR):" -ForegroundColor Cyan
+    Write-Host "Usuario original: $global:OriginalUser" -ForegroundColor Green
+    Write-Host "Perfil original: $global:OriginalUserProfile" -ForegroundColor Green
+    Write-Host "Archivo config: $global:UserConfigFile" -ForegroundColor Green
+    Write-Host "========================================" -ForegroundColor Cyan
+}
 
 function Test-AdminElevation {
     $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
@@ -17,39 +51,72 @@ function Test-AdminElevation {
     
     if (-not $isAdmin) {
         Write-Host "Se requieren privilegios de administrador. Solicitando elevacion..." -ForegroundColor Yellow
+        
         $scriptPath = $PSCommandPath
         if (-not $scriptPath -or $scriptPath -eq "") {
             $scriptPath = $MyInvocation.MyCommand.Definition
         }
+        
         $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
         $process = Start-Process -FilePath "PowerShell.exe" -ArgumentList $arguments -Verb RunAs -PassThru
         $process.WaitForExit()
         exit
     }
-    Write-Host "Ejecutando con privilegios de administrador..." -ForegroundColor Green
+    
+    Write-Host "========================================" -ForegroundColor Green
+    Write-Host "PROCESO ELEVADO INICIADO" -ForegroundColor Green
+    
+    # Recuperar variables desde C:\Temp (NO volver a capturar)
+    $configFile = "C:\Temp\WindowsOptimizer\user_config.txt"
+    Write-Host "Leyendo configuracion desde: $configFile" -ForegroundColor Yellow
+    
+    if (Test-Path $configFile) {
+        $content = Get-Content -Path $configFile -Encoding UTF8 -ErrorAction SilentlyContinue
+        if ($content) {
+            foreach ($line in $content) {
+                if ($line -match "OriginalUser=(.*)") {
+                    $global:OriginalUser = $matches[1]
+                }
+                if ($line -match "OriginalUserProfile=(.*)") {
+                    $global:OriginalUserProfile = $matches[1]
+                }
+            }
+            Write-Host "Variables recuperadas del archivo:" -ForegroundColor Green
+            Write-Host "  Usuario: $global:OriginalUser" -ForegroundColor Green
+            Write-Host "  Perfil: $global:OriginalUserProfile" -ForegroundColor Green
+        } else {
+            Write-Host "Error leyendo archivo de configuracion" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "Archivo de configuracion NO encontrado: $configFile" -ForegroundColor Red
+        Write-Host "  Intentando detectar usuario desde WMI..." -ForegroundColor Yellow
+    }
+    
+    # Si no se recuperaron, intentar desde WMI (SOLO como respaldo)
+    if (-not $global:OriginalUser -or $global:OriginalUser -eq "Administrator" -or $global:OriginalUser -eq "SYSTEM") {
+        try {
+            $session = Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object -ExpandProperty UserName
+            if ($session) {
+                $global:OriginalUser = $session.Split('\')[1]
+                $global:OriginalUserProfile = "C:\Users\$global:OriginalUser"
+                Write-Host "Usuario detectado desde WMI: $global:OriginalUser" -ForegroundColor Green
+            }
+        } catch {
+            $global:OriginalUser = $env:USERNAME
+            $global:OriginalUserProfile = $env:USERPROFILE
+            Write-Host "Usando usuario actual: $global:OriginalUser" -ForegroundColor Yellow
+        }
+    }
+    
+    Write-Host "EJECUTANDO CON PRIVILEGIOS DE ADMINISTRADOR" -ForegroundColor Green
+    Write-Host "Usuario objetivo: $global:OriginalUser" -ForegroundColor Cyan
+    Write-Host "Perfil objetivo: $global:OriginalUserProfile" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Green
     return $true
 }
 
+# Ejecutar elevación
 Test-AdminElevation
-
-# OBTENER EL USUARIO ORIGINAL (el que ejecutó el script, no el administrador)
-$global:OriginalUser = $env:USERNAME
-$global:OriginalUserProfile = $env:USERPROFILE
-
-# Si estamos ejecutando como administrador, obtener el usuario original
-if ($global:OriginalUser -eq "Administrator" -or $global:OriginalUser -eq "SYSTEM") {
-    # Intentar obtener el usuario que realmente inició la sesión
-    try {
-        $session = Get-CimInstance -ClassName Win32_ComputerSystem | Select-Object -ExpandProperty UserName
-        if ($session) {
-            $global:OriginalUser = $session.Split('\')[1]
-            $global:OriginalUserProfile = "C:\Users\$global:OriginalUser"
-            Write-Log "Usuario original detectado: $global:OriginalUser" "INFO"
-        }
-    } catch {
-        Write-Log "No se pudo detectar el usuario original, usando: $global:OriginalUser" "WARN"
-    }
-}
 
 # Detectar version de Windows
 $global:WindowsVersion = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion").ProductName
@@ -63,7 +130,6 @@ $global:LogFile = "$global:LogDir\optimizer_log.txt"
 New-Item -Path $global:LogDir -ItemType Directory -Force | Out-Null
 if (Test-Path $global:LogFile) { Remove-Item $global:LogFile -Force }
 
-# Variables UI
 $global:LogTextBox = $null
 $global:InstallRunning = $false
 
@@ -79,57 +145,89 @@ function Write-Log {
         [System.Windows.Forms.Application]::DoEvents()
     }
 }
-#endregion
 
-#region [FUNCIONES DE LIMPIEZA - CORREGIDAS CON USUARIO ORIGINAL]
+# FUNCION PARA LEER EL USUARIO DESDE EL ARCHIVO DE CONFIGURACION
+function Get-OriginalUser {
+    $configFile = "C:\Temp\WindowsOptimizer\user_config.txt"
+    if (Test-Path $configFile) {
+        $content = Get-Content -Path $configFile -Encoding UTF8 -ErrorAction SilentlyContinue
+        if ($content) {
+            foreach ($line in $content) {
+                if ($line -match "OriginalUser=(.*)") {
+                    return $matches[1]
+                }
+            }
+        }
+    }
+    return $env:USERNAME
+}
+
+function Get-OriginalUserProfile {
+    $configFile = "C:\Temp\WindowsOptimizer\user_config.txt"
+    if (Test-Path $configFile) {
+        $content = Get-Content -Path $configFile -Encoding UTF8 -ErrorAction SilentlyContinue
+        if ($content) {
+            foreach ($line in $content) {
+                if ($line -match "OriginalUserProfile=(.*)") {
+                    return $matches[1]
+                }
+            }
+        }
+    }
+    return $env:USERPROFILE
+}
+
 function Clear-CurrentUserTemp {
     Write-Log "========== LIMPIANDO PERFIL ACTUAL ==========" "TASK"
     
-    # Usar el perfil del usuario original, no el del administrador
-    $userTemp = "$global:OriginalUserProfile\AppData\Local\Temp"
+    $user = Get-OriginalUser
+    $profile = Get-OriginalUserProfile
+    $userTemp = "$profile\AppData\Local\Temp"
+    
+    Write-Log "Usuario original: $user" "INFO"
+    Write-Log "Ruta temporal: $userTemp" "INFO"
     
     if (Test-Path $userTemp) {
-        Write-Log "Limpiando: $userTemp" "INFO"
-        Write-Log "Usuario: $global:OriginalUser" "INFO"
-        
         $deleted = 0
-        try {
-            $items = Get-ChildItem $userTemp -Recurse -Force -EA 0
+        $items = Get-ChildItem $userTemp -Recurse -Force -ErrorAction SilentlyContinue
+        if ($items) {
+            $total = $items.Count
+            Write-Log "Total de elementos a procesar: $total" "INFO"
             foreach ($item in $items) {
                 try {
-                    Remove-Item -Path $item.FullName -Force -Recurse -EA 0
+                    Remove-Item -Path $item.FullName -Force -Recurse -ErrorAction SilentlyContinue
                     $deleted++
+                    if ($deleted % 100 -eq 0) {
+                        Write-Log "  Progreso: $deleted de $total elementos" "INFO"
+                    }
                 } catch {
                     # Si no se puede eliminar, continuar
                 }
             }
-            Write-Log "Archivos eliminados: $deleted" "OK"
-        } catch {
-            Write-Log "Error: $_" "ERROR"
+            Write-Log "Archivos eliminados: $deleted de $total" "OK"
+        } else {
+            Write-Log "No hay elementos para eliminar" "INFO"
         }
     } else {
         Write-Log "Ruta no encontrada: $userTemp" "WARN"
-        Write-Log "Intentando con ruta alternativa..." "INFO"
-        
-        # Intentar con la variable de entorno TEMP del usuario
-        $altTemp = "$env:SystemDrive\Users\$global:OriginalUser\AppData\Local\Temp"
+        $altTemp = "C:\Users\$user\AppData\Local\Temp"
         if (Test-Path $altTemp) {
             Write-Log "Usando ruta alternativa: $altTemp" "INFO"
             $deleted = 0
-            try {
-                $items = Get-ChildItem $altTemp -Recurse -Force -EA 0
+            $items = Get-ChildItem $altTemp -Recurse -Force -ErrorAction SilentlyContinue
+            if ($items) {
                 foreach ($item in $items) {
                     try {
-                        Remove-Item -Path $item.FullName -Force -Recurse -EA 0
+                        Remove-Item -Path $item.FullName -Force -Recurse -ErrorAction SilentlyContinue
                         $deleted++
                     } catch {
                         # Si no se puede eliminar, continuar
                     }
                 }
                 Write-Log "Archivos eliminados: $deleted" "OK"
-            } catch {
-                Write-Log "Error: $_" "ERROR"
             }
+        } else {
+            Write-Log "No se encontró la ruta temporal del usuario" "ERROR"
         }
     }
     Write-Log "========== COMPLETADO ==========" "OK"
@@ -138,17 +236,19 @@ function Clear-CurrentUserTemp {
 function Clear-AllUsersTemp {
     Write-Log "========== LIMPIANDO TODOS LOS PERFILES ==========" "TASK"
     $deleted = 0
-    Get-ChildItem "C:\Users" -Directory -EA 0 | ForEach-Object {
+    Get-ChildItem "C:\Users" -Directory -ErrorAction SilentlyContinue | ForEach-Object {
         $userTemp = Join-Path $_.FullName "AppData\Local\Temp"
         if (Test-Path $userTemp) {
             Write-Log "Limpiando: $($_.Name)" "INFO"
-            $items = Get-ChildItem $userTemp -Recurse -Force -EA 0
-            foreach ($item in $items) {
-                try {
-                    Remove-Item -Path $item.FullName -Force -Recurse -EA 0
-                    $deleted++
-                } catch {
-                    # Si no se puede eliminar, continuar
+            $items = Get-ChildItem $userTemp -Recurse -Force -ErrorAction SilentlyContinue
+            if ($items) {
+                foreach ($item in $items) {
+                    try {
+                        Remove-Item -Path $item.FullName -Force -Recurse -ErrorAction SilentlyContinue
+                        $deleted++
+                    } catch {
+                        # Si no se puede eliminar, continuar
+                    }
                 }
             }
         }
@@ -162,16 +262,18 @@ function Clear-WindowsTemp {
     $deleted = 0
     if (Test-Path "C:\Windows\Temp") {
         Write-Log "Ruta: C:\Windows\Temp" "INFO"
-        $items = Get-ChildItem "C:\Windows\Temp" -Recurse -Force -EA 0
-        foreach ($item in $items) {
-            try {
-                Remove-Item -Path $item.FullName -Force -Recurse -EA 0
-                $deleted++
-            } catch {
-                # Si no se puede eliminar, continuar
+        $items = Get-ChildItem "C:\Windows\Temp" -Recurse -Force -ErrorAction SilentlyContinue
+        if ($items) {
+            foreach ($item in $items) {
+                try {
+                    Remove-Item -Path $item.FullName -Force -Recurse -ErrorAction SilentlyContinue
+                    $deleted++
+                } catch {
+                    # Si no se puede eliminar, continuar
+                }
             }
+            Write-Log "Archivos eliminados: $deleted" "OK"
         }
-        Write-Log "Archivos eliminados: $deleted" "OK"
     } else {
         Write-Log "Ruta no encontrada: C:\Windows\Temp" "WARN"
     }
@@ -189,22 +291,28 @@ function Clear-InternetCache {
         Write-Log "  Error limpiando cache de IE" "WARN"
     }
     
-    # Limpiar cache del usuario original
+    $profile = Get-OriginalUserProfile
     $cachePaths = @(
-        "$global:OriginalUserProfile\AppData\Local\Microsoft\Windows\INetCache",
-        "$global:OriginalUserProfile\AppData\Local\Microsoft\Edge\User Data\Default\Cache",
-        "$global:OriginalUserProfile\AppData\Local\Google\Chrome\User Data\Default\Cache"
+        "$profile\AppData\Local\Microsoft\Windows\INetCache",
+        "$profile\AppData\Local\Microsoft\Edge\User Data\Default\Cache",
+        "$profile\AppData\Local\Google\Chrome\User Data\Default\Cache",
+        "$profile\AppData\Local\Microsoft\Edge\User Data\Default\Code Cache"
     )
+    
+    $user = Get-OriginalUser
+    Write-Log "Limpiando cache del usuario: $user" "INFO"
     foreach ($path in $cachePaths) {
         if (Test-Path $path) {
             Write-Log "Limpiando: $path" "INFO"
-            $items = Get-ChildItem $path -Recurse -Force -EA 0
-            foreach ($item in $items) {
-                try {
-                    Remove-Item -Path $item.FullName -Force -Recurse -EA 0
-                    $deleted++
-                } catch {
-                    # Si no se puede eliminar, continuar
+            $items = Get-ChildItem $path -Recurse -Force -ErrorAction SilentlyContinue
+            if ($items) {
+                foreach ($item in $items) {
+                    try {
+                        Remove-Item -Path $item.FullName -Force -Recurse -ErrorAction SilentlyContinue
+                        $deleted++
+                    } catch {
+                        # Si no se puede eliminar, continuar
+                    }
                 }
             }
         }
@@ -249,15 +357,13 @@ function Clear-WindowsUpdateCache {
         net stop wuauserv /y | Out-Null
         net stop cryptsvc /y | Out-Null
         Write-Log "  Servicios detenidos" "OK"
-        
         Write-Log "Limpiando carpetas..." "INFO"
         @("$env:SystemRoot\SoftwareDistribution", "$env:SystemRoot\system32\catroot2") | ForEach-Object {
             if (Test-Path $_) { 
-                Remove-Item "$_\*" -Recurse -Force -EA 0
+                Remove-Item "$_\*" -Recurse -Force -ErrorAction SilentlyContinue
                 Write-Log "  Limpiado: $_" "OK"
             }
         }
-        
         Write-Log "Reiniciando servicios..." "INFO"
         net start bits | Out-Null
         net start wuauserv | Out-Null
@@ -280,7 +386,6 @@ function Register-DLLs {
         "wuaueng.dll", "wuaueng1.dll", "wucltui.dll", "wups.dll", "wups2.dll",
         "wuweb.dll", "qmgr.dll", "qmgrprxy.dll"
     )
-    
     Push-Location "$env:windir\system32"
     foreach ($dll in $dlls) {
         try {
@@ -309,13 +414,10 @@ function Invoke-FullCleanup {
     Write-Log "========== LIMPIEZA COMPLETA FINALIZADA ==========" "OK"
     Write-Log "Se recomienda reiniciar el sistema." "INFO"
 }
-#endregion
 
-#region [FUNCIONES DE DEBLOAT]
 function Remove-AllBloatware {
     Write-Log "========== ELIMINANDO BLOATWARE ==========" "TASK"
     $removed = 0
-    
     $bloatware = @(
         "Microsoft.BingNews", "Microsoft.BingWeather", "Microsoft.GetHelp", "Microsoft.Getstarted",
         "Microsoft.Microsoft3DViewer", "Microsoft.MicrosoftOfficeHub", "Microsoft.MicrosoftSolitaireCollection",
@@ -328,35 +430,30 @@ function Remove-AllBloatware {
         "Microsoft.Windows.DevHome", "Microsoft.Windows.Photos", "Microsoft.Windows.ScreenSketch",
         "Microsoft.WindowsSoundRecorder", "Microsoft.OutlookForWindows", "Microsoft.Clipchamp.Clipchamp"
     )
-    
     if ($global:IsWindows11) {
         $bloatware += @("Microsoft.Copilot", "Microsoft.Windows.AI.Copilot")
     }
-    
     $bloatwareRegex = $bloatware -join '|'
-    
     Write-Log "Eliminando paquetes de usuario..." "INFO"
     Get-AppxPackage | Where-Object { $_.Name -match $bloatwareRegex } | ForEach-Object {
         try {
-            Remove-AppxPackage -Package $_ -EA 0
+            Remove-AppxPackage -Package $_ -ErrorAction SilentlyContinue
             $removed++
             Write-Log "  Eliminado: $($_.Name)" "OK"
         } catch {
             Write-Log "  Error: $($_.Name)" "WARN"
         }
     }
-    
     Write-Log "Eliminando paquetes provisionados..." "INFO"
     Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -match $bloatwareRegex } | ForEach-Object {
         try {
-            Remove-AppxProvisionedPackage -Online -PackageName $_.PackageName -EA 0
+            Remove-AppxProvisionedPackage -Online -PackageName $_.PackageName -ErrorAction SilentlyContinue
             $removed++
             Write-Log "  Eliminado provisionado: $($_.DisplayName)" "OK"
         } catch {
             Write-Log "  Error: $($_.DisplayName)" "WARN"
         }
     }
-    
     Write-Log "========== COMPLETADO: $removed apps eliminadas ==========" "OK"
 }
 
@@ -364,14 +461,12 @@ function Remove-OneDrive {
     Write-Log "========== DESINSTALANDO ONEDRIVE ==========" "TASK"
     try {
         Write-Log "Deteniendo procesos de OneDrive..." "INFO"
-        Get-Process "OneDrive*" -EA 0 | Stop-Process -Force
-        
+        Get-Process "OneDrive*" -ErrorAction SilentlyContinue | Stop-Process -Force
         Write-Log "Buscando desinstalador..." "INFO"
         $uninstaller = "$env:SYSTEMROOT\SysWOW64\OneDriveSetup.exe"
         if (!(Test-Path $uninstaller)) { 
             $uninstaller = "$env:SYSTEMROOT\System32\OneDriveSetup.exe" 
         }
-        
         if (Test-Path $uninstaller) {
             Write-Log "Ejecutando desinstalador..." "INFO"
             Start-Process $uninstaller "/uninstall" -NoNewWindow -Wait
@@ -387,63 +482,54 @@ function Remove-OneDrive {
 
 function Disable-Copilot {
     Write-Log "========== DESACTIVANDO COPILOT ==========" "TASK"
-    
     if (-not $global:IsWindows11) {
         Write-Log "Copilot solo existe en Windows 11. No hay nada que desactivar." "WARN"
         Write-Log "========== COMPLETADO ==========" "OK"
         return
     }
-    
     $removed = 0
-    
     Write-Log "Eliminando paquetes de Copilot..." "INFO"
     Get-AppxPackage | Where-Object { $_.Name -match "Copilot|Microsoft.Windows.AI.Copilot|Microsoft.Copilot" } | ForEach-Object {
         try {
-            Remove-AppxPackage -Package $_ -EA 0
+            Remove-AppxPackage -Package $_ -ErrorAction SilentlyContinue
             $removed++
             Write-Log "  Eliminado: $($_.Name)" "OK"
         } catch {
             Write-Log "  Error: $($_.Name)" "WARN"
         }
     }
-    
     Write-Log "Eliminando paquetes provisionados de Copilot..." "INFO"
     Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -match "Copilot|Microsoft.Windows.AI.Copilot|Microsoft.Copilot" } | ForEach-Object {
         try {
-            Remove-AppxProvisionedPackage -Online -PackageName $_.PackageName -EA 0
+            Remove-AppxProvisionedPackage -Online -PackageName $_.PackageName -ErrorAction SilentlyContinue
             $removed++
             Write-Log "  Eliminado provisionado: $($_.DisplayName)" "OK"
         } catch {
             Write-Log "  Error: $($_.DisplayName)" "WARN"
         }
     }
-    
     Write-Log "Desactivando Copilot en el registro..." "INFO"
     try {
         $regPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot"
         if (!(Test-Path $regPath)) { New-Item $regPath -Force | Out-Null }
-        Set-ItemProperty -Path $regPath -Name "TurnOffWindowsCopilot" -Value 1 -EA 0
+        Set-ItemProperty -Path $regPath -Name "TurnOffWindowsCopilot" -Value 1 -ErrorAction SilentlyContinue
         Write-Log "  Copilot desactivado en registro" "OK"
     } catch {
         Write-Log "  Error en registro" "WARN"
     }
-    
     Write-Log "Reiniciando explorador..." "INFO"
     try {
-        Stop-Process -Name explorer -Force -EA 0
+        Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 2
         Start-Process explorer.exe
         Write-Log "  Explorador reiniciado" "OK"
     } catch {
         Write-Log "  Error al reiniciar explorador" "WARN"
     }
-    
     Write-Log "========== COMPLETADO: $removed elementos eliminados ==========" "OK"
     Write-Log "Se recomienda reiniciar el sistema." "INFO"
 }
-#endregion
 
-#region [FUNCIONES DE INSTALACIÓN]
 function Install-SelectedApps {
     param([string[]]$Apps)
     if ($global:InstallRunning) { 
@@ -452,16 +538,14 @@ function Install-SelectedApps {
     }
     $global:InstallRunning = $true
     Write-Log "========== INSTALANDO APLICACIONES ==========" "TASK"
-    
     $wingetAvailable = $false
     try {
         if (Get-Command winget -ErrorAction SilentlyContinue) {
             $wingetAvailable = $true
         }
     } catch { }
-    
     if (-not $wingetAvailable) { 
-        Write-Log "Winget no disponible. Abriendo páginas de descarga..." "WARN"
+        Write-Log "Winget no disponible. Abriendo paginas de descarga..." "WARN"
         foreach ($app in $Apps) {
             switch ($app) {
                 "7zip" { Start-Process "https://www.7-zip.org/" }
@@ -473,7 +557,6 @@ function Install-SelectedApps {
         $global:InstallRunning = $false
         return
     }
-    
     foreach ($app in $Apps) {
         Write-Log "Instalando: $app..." "INFO"
         try {
@@ -503,56 +586,52 @@ function Install-OneDrive {
     try {
         Write-Log "Descargando instalador..." "INFO"
         Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/?linkid=844652" -OutFile $installer -UseBasicParsing
-        if ((Get-Item $installer -EA 0).Length -gt 1MB) {
+        if ((Get-Item $installer -ErrorAction SilentlyContinue).Length -gt 1MB) {
             Write-Log "Ejecutando instalador..." "INFO"
             Start-Process $installer "/silent" -Wait
             Write-Log "  OneDrive instalado correctamente" "OK"
         } else {
-            throw "Archivo descargado no válido"
+            throw "Archivo descargado no valido"
         }
     } catch {
         Write-Log "Error: $_" "ERROR"
     }
     if (Test-Path $installer) { 
-        Remove-Item $installer -Force -EA 0 
+        Remove-Item $installer -Force -ErrorAction SilentlyContinue
     }
     Write-Log "========== COMPLETADO ==========" "OK"
 }
 
 function Install-Copilot {
     Write-Log "========== INSTALANDO COPILOT ==========" "TASK"
-    
     if (-not $global:IsWindows11) {
-        Write-Log "Copilot solo está disponible en Windows 11" "WARN"
-        Write-Log "Abriendo página web de Copilot..." "INFO"
+        Write-Log "Copilot solo esta disponible en Windows 11" "WARN"
+        Write-Log "Abriendo pagina web de Copilot..." "INFO"
         Start-Process "https://copilot.microsoft.com/"
         Write-Log "========== COMPLETADO ==========" "OK"
         return
     }
-    
-    Write-Log "Opción 1: Intentando instalar desde Microsoft Store..." "INFO"
+    Write-Log "Opcion 1: Intentando instalar desde Microsoft Store..." "INFO"
     try {
         Start-Process "ms-windows-store://pdp/?productid=9N9K4M7VZP0C"
         Write-Log "  Se ha abierto Microsoft Store. Busca 'Copilot' y haz clic en Instalar." "INFO"
     } catch {
         Write-Log "  Error al abrir la tienda: $_" "WARN"
     }
-    
-    Write-Log "Opción 2: Intentando instalar con Winget..." "INFO"
+    Write-Log "Opcion 2: Intentando instalar con Winget..." "INFO"
     $wingetAvailable = $false
     try {
         if (Get-Command winget -ErrorAction SilentlyContinue) {
             $wingetAvailable = $true
         }
     } catch { }
-    
     if ($wingetAvailable) {
         try {
             winget install --id Microsoft.Copilot --exact --accept-package-agreements --accept-source-agreements --silent
             if ($LASTEXITCODE -eq 0) { 
                 Write-Log "  Copilot instalado correctamente con Winget" "OK"
                 Write-Log "Reiniciando explorador..." "INFO"
-                Stop-Process -Name explorer -Force -EA 0
+                Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
                 Start-Sleep -Seconds 2
                 Start-Process explorer.exe
                 Write-Log "========== COMPLETADO ==========" "OK"
@@ -564,16 +643,12 @@ function Install-Copilot {
     } else {
         Write-Log "  Winget no disponible" "WARN"
     }
-    
-    Write-Log "Opción 3: Abriendo página web de Copilot..." "INFO"
+    Write-Log "Opcion 3: Abriendo pagina web de Copilot..." "INFO"
     Start-Process "https://copilot.microsoft.com/"
     Write-Log "  Puedes usar Copilot desde el navegador mientras tanto." "INFO"
-    
     Write-Log "========== COMPLETADO ==========" "OK"
 }
-#endregion
 
-#region [INTERFAZ GRAFICA]
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
@@ -620,7 +695,6 @@ function New-Button {
     return $btn
 }
 
-# Panel Debloat
 $pnlDebloat = New-Object System.Windows.Forms.Panel
 $pnlDebloat.Size = New-Object System.Drawing.Size($btnWidth, 95)
 $pnlDebloat.Location = New-Object System.Drawing.Point(10, $currentY)
@@ -641,7 +715,6 @@ $btnRemoveOD = New-Button "DESINSTALAR ONEDRIVE" 5 55 240 26 $colorBtnOneDrive {
 $pnlDebloat.Controls.AddRange(@($lblDebloat, $btnRemoveAll, $btnDisableCopilot, $btnRemoveOD))
 $currentY += 100
 
-# Panel Limpieza
 $pnlClean = New-Object System.Windows.Forms.Panel
 $pnlClean.Size = New-Object System.Drawing.Size($btnWidth, 110)
 $pnlClean.Location = New-Object System.Drawing.Point(10, $currentY)
@@ -664,7 +737,6 @@ $btnFullClean = New-Button "LIMPIEZA COMPLETA" 5 81 490 26 $colorBtnFull { Invok
 $pnlClean.Controls.AddRange(@($lblClean, $btnClearCurr, $btnClearAll, $btnClearWinTemp, $btnClearCache, $btnFullClean))
 $currentY += 115
 
-# Panel Instalacion
 $pnlInstall = New-Object System.Windows.Forms.Panel
 $pnlInstall.Size = New-Object System.Drawing.Size($btnWidth, 145)
 $pnlInstall.Location = New-Object System.Drawing.Point(10, $currentY)
@@ -718,26 +790,21 @@ $btnInstall = New-Button "INSTALAR SELECCIONADAS" 5 103 490 26 $colorBtnSpecial 
     if ($chkChrome.Checked) { $apps += "Chrome" }
     if ($chkFirefox.Checked) { $apps += "Firefox" }
     if ($chkVLC.Checked) { $apps += "VLC" }
-    
     if ($apps.Count -gt 0) { 
         Install-SelectedApps -Apps $apps 
     }
-    
     if ($chkOneDrive.Checked) { Install-OneDrive }
-    
     if ($chkTeams.Checked) { 
         Write-Log "========== INSTALANDO TEAMS ==========" "TASK"
         try {
             Start-Process "https://www.microsoft.com/es-mx/microsoft-teams/download-app"
-            Write-Log "  Se abrió la página de descarga de Teams" "OK"
+            Write-Log "  Se abrio la pagina de descarga de Teams" "OK"
         } catch {
             Write-Log "  Error: $_" "ERROR"
         }
         Write-Log "========== COMPLETADO ==========" "OK"
     }
-    
     if ($chkCopilot.Checked) { Install-Copilot }
-    
     $chk7zip.Checked = $false
     $chkChrome.Checked = $false
     $chkFirefox.Checked = $false
@@ -753,7 +820,6 @@ $pnlInstall.Controls.AddRange(@(
 ))
 $currentY += 150
 
-# Panel Herramientas
 $pnlTools = New-Object System.Windows.Forms.Panel
 $pnlTools.Size = New-Object System.Drawing.Size($btnWidth, 65)
 $pnlTools.Location = New-Object System.Drawing.Point(10, $currentY)
@@ -791,7 +857,7 @@ function Reset-WindowsUpdate {
     net stop wuauserv /y | Out-Null
     Write-Log "Limpiando cache..." "INFO"
     if (Test-Path "$env:SystemRoot\SoftwareDistribution") { 
-        Remove-Item "$env:SystemRoot\SoftwareDistribution\*" -Recurse -Force -EA 0
+        Remove-Item "$env:SystemRoot\SoftwareDistribution\*" -Recurse -Force -ErrorAction SilentlyContinue
     }
     Write-Log "Reiniciando servicios..." "INFO"
     net start bits | Out-Null
@@ -802,7 +868,7 @@ function Reset-WindowsUpdate {
 function Create-RestorePoint {
     Write-Log "========== CREANDO PUNTO DE RESTAURACION ==========" "TASK"
     try {
-        Checkpoint-Computer -Description "Windows Optimizer" -EA 0
+        Checkpoint-Computer -Description "Windows Optimizer" -ErrorAction SilentlyContinue
         Write-Log "  Punto de restauracion creado" "OK"
     } catch { 
         Write-Log "  No se pudo crear punto de restauracion" "WARN" 
@@ -814,7 +880,7 @@ function Kill-HungProcesses {
     Write-Log "========== TERMINANDO PROCESOS BLOQUEADOS ==========" "TASK"
     $procs = @("dism", "sfc", "TiWorker", "TrustedInstaller", "winget")
     foreach ($proc in $procs) {
-        Get-Process -Name $proc -EA 0 | Stop-Process -Force -EA 0 | Out-Null
+        Get-Process -Name $proc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
         Write-Log "  Terminado: $proc" "OK"
     }
     Write-Log "========== COMPLETADO ==========" "OK"
@@ -828,7 +894,6 @@ $btnRestore = New-Button "PTO RESTAURACION" 365 25 115 26 $colorBtn { Create-Res
 $pnlTools.Controls.AddRange(@($lblTools, $btnOptimize, $btnRepair, $btnResetWU, $btnRestore))
 $currentY += 70
 
-# Panel Control
 $pnlControl = New-Object System.Windows.Forms.Panel
 $pnlControl.Size = New-Object System.Drawing.Size($btnWidth, 40)
 $pnlControl.Location = New-Object System.Drawing.Point(10, $currentY)
@@ -838,9 +903,8 @@ $btnKill = New-Button "TERMINAR PROCESOS BLOQUEADOS" 5 8 490 26 $colorBtn { Kill
 $pnlControl.Controls.Add($btnKill)
 $currentY += 45
 
-# Creditos
 $lblCredit = New-Object System.Windows.Forms.Label
-$lblCredit.Text = "Creado por CFRG - V7.6"
+$lblCredit.Text = "Creado por CFRG - V8.8"
 $lblCredit.Location = New-Object System.Drawing.Point(10, $currentY)
 $lblCredit.Size = New-Object System.Drawing.Size($btnWidth, 14)
 $lblCredit.Font = $fontItalic
@@ -848,11 +912,9 @@ $lblCredit.ForeColor = [System.Drawing.Color]::FromArgb(136, 136, 136)
 $lblCredit.TextAlign = 'MiddleCenter'
 $currentY += 16
 
-# Boton Cerrar
 $btnClose = New-Button "CERRAR PROGRAMA" 10 $currentY 490 28 $colorBtnClose { $Form.Close() }
 $currentY += 32
 
-# Panel de Log
 $lblLog = New-Object System.Windows.Forms.Label
 $lblLog.Text = "REGISTRO DE ACTIVIDAD"
 $lblLog.Location = New-Object System.Drawing.Point(10, $currentY)
@@ -873,7 +935,6 @@ $global:LogTextBox.ScrollBars = 'Vertical'
 
 $Form.Controls.AddRange(@($pnlDebloat, $pnlClean, $pnlInstall, $pnlTools, $pnlControl, $lblCredit, $btnClose, $lblLog, $global:LogTextBox))
 
-# Timer para actualizar UI
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 500
 $timer.Add_Tick({
@@ -888,11 +949,14 @@ $timer.Start()
 Write-Log "=========================================" "INFO"
 Write-Log "Windows Optimizer v$global:ScriptVersion" "INFO"
 Write-Log "Sistema: $global:WindowsVersion (Build $global:WindowsBuild)" "INFO"
-Write-Log "Usuario: $global:OriginalUser" "INFO"
+
+$originalUser = Get-OriginalUser
+$originalProfile = Get-OriginalUserProfile
+Write-Log "Usuario original: $originalUser" "INFO"
+Write-Log "Perfil original: $originalProfile" "INFO"
 Write-Log "=========================================" "INFO"
 Write-Log "Listo - Selecciona una opcion" "INFO"
 Write-Log "=========================================" "INFO"
 
 [void]$Form.ShowDialog()
 $timer.Stop()
-#endregion
