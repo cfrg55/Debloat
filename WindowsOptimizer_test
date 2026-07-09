@@ -1,55 +1,35 @@
 <#
 .SYNOPSIS
-    Windows 10/11 Optimizer & Debloater GUI v7.2 - UNC Compatible
+    Windows Optimizer v7.2 - Version Estable
 .DESCRIPTION
-    Herramienta completa para optimizar Windows 10/11 (todas las versiones)
-    Compatible con ejecucion desde rutas UNC (red)
+    Herramienta para optimizar Windows 10/11
 .NOTES
-    Compatible: Windows 10 20H2+, Windows 11 todas las versiones
     Requiere: Ejecutar como Administrador
 #>
 
-#region [INICIALIZACION CON ELEVACION - COMPATIBLE CON UNC]
+#region [ELEVACION]
 $ErrorActionPreference = 'Continue'
 $global:ScriptVersion = "7.2"
 
-# Función para auto-elevarse (funciona con rutas UNC)
 function Test-AdminElevation {
-    $currentPrincipal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+    $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     $isAdmin = $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     
     if (-not $isAdmin) {
         Write-Host "Se requieren privilegios de administrador. Solicitando elevacion..." -ForegroundColor Yellow
-        
         $scriptPath = $PSCommandPath
         if (-not $scriptPath -or $scriptPath -eq "") {
             $scriptPath = $MyInvocation.MyCommand.Definition
         }
-        
-        $isUncPath = $scriptPath -like "\\*"
-        
-        if ($isUncPath) {
-            Write-Host "Detectada ejecucion desde ruta UNC. Copiando script a temporal local..." -ForegroundColor Cyan
-            $localScript = "$env:TEMP\WindowsOptimizer_$(Get-Random).ps1"
-            Copy-Item -Path $scriptPath -Destination $localScript -Force
-            $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$localScript`""
-            $process = Start-Process -FilePath "PowerShell.exe" -ArgumentList $arguments -Verb RunAs -PassThru
-            $process.WaitForExit()
-            Start-Sleep -Seconds 2
-            Remove-Item $localScript -Force -ErrorAction SilentlyContinue
-        } else {
-            $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
-            $process = Start-Process -FilePath "PowerShell.exe" -ArgumentList $arguments -Verb RunAs -PassThru
-            $process.WaitForExit()
-        }
+        $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
+        $process = Start-Process -FilePath "PowerShell.exe" -ArgumentList $arguments -Verb RunAs -PassThru
+        $process.WaitForExit()
         exit
     }
-    
     Write-Host "Ejecutando con privilegios de administrador..." -ForegroundColor Green
     return $true
 }
 
-# Ejecutar elevación
 Test-AdminElevation
 
 # Detectar version de Windows
@@ -57,30 +37,15 @@ $global:WindowsVersion = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\
 $global:WindowsBuild = [Environment]::OSVersion.Version.Build
 $global:IsWindows11 = $global:WindowsBuild -ge 22000
 $global:Is24H2 = $global:WindowsBuild -ge 26100
-$global:IsWindows10 = $global:WindowsBuild -ge 10240 -and $global:WindowsBuild -lt 22000
 
-# Verificar Winget
-$global:WingetAvailable = $false
-try {
-    if (Get-Command winget -ErrorAction SilentlyContinue) {
-        $global:WingetAvailable = $true
-    }
-} catch { }
-
-# Directorios
+# Crear directorio de logs
 $global:LogDir = "C:\Temp\WindowsOptimizer"
-$global:DownloadDir = "$global:LogDir\Downloads"
-New-Item -Path $global:LogDir -ItemType Directory -Force | Out-Null
-New-Item -Path $global:DownloadDir -ItemType Directory -Force | Out-Null
-
 $global:LogFile = "$global:LogDir\optimizer_log.txt"
+New-Item -Path $global:LogDir -ItemType Directory -Force | Out-Null
 if (Test-Path $global:LogFile) { Remove-Item $global:LogFile -Force }
 
-# Variables para UI
+# Variables UI
 $global:LogTextBox = $null
-$global:CurrentJob = $null
-$global:RepairRunning = $false
-$global:RepairTimer = $null
 $global:InstallRunning = $false
 
 function Write-Log {
@@ -95,35 +60,6 @@ function Write-Log {
         [System.Windows.Forms.Application]::DoEvents()
     }
 }
-#endregion
-
-#region [LISTAS DE BLOATWARE - COMPATIBILIDAD MEJORADA]
-$global:Bloatware = @(
-    "Microsoft.BingNews", "Microsoft.BingWeather", "Microsoft.GetHelp", "Microsoft.Getstarted"
-    "Microsoft.Microsoft3DViewer", "Microsoft.MicrosoftOfficeHub", "Microsoft.MicrosoftSolitaireCollection"
-    "Microsoft.MixedReality.Portal", "Microsoft.Office.OneNote", "Microsoft.People", "Microsoft.Print3D"
-    "Microsoft.SkypeApp", "Microsoft.WindowsAlarms", "Microsoft.WindowsFeedbackHub", "Microsoft.WindowsMaps"
-    "Microsoft.Xbox.TCUI", "Microsoft.XboxApp", "Microsoft.XboxGameOverlay", "Microsoft.XboxGamingOverlay"
-    "Microsoft.XboxIdentityProvider", "Microsoft.YourPhone", "Microsoft.ZuneMusic", "Microsoft.ZuneVideo"
-    "CandyCrush", "Facebook", "Twitter", "Spotify", "Netflix", "Disney",
-    "Microsoft.Advertising.Xaml", "Microsoft.MSPaint", "Microsoft.Todos", "Microsoft.PowerAutomateDesktop",
-    "Microsoft.Windows.DevHome", "Microsoft.Windows.Photos", "Microsoft.Windows.ScreenSketch",
-    "Microsoft.WindowsSoundRecorder", "Microsoft.OutlookForWindows", "Microsoft.Clipchamp.Clipchamp",
-    "Microsoft.Office.Todo", "Microsoft.Windows.CloudExperienceHost",
-    "Microsoft.Windows.SecHealthUI", "Microsoft.WindowsCamera", "Microsoft.WindowsCalculator"
-)
-
-# Solo agregar paquetes específicos de Windows 11
-if ($global:IsWindows11) {
-    $global:Bloatware += @(
-        "Microsoft.Windows.AI.Copilot", 
-        "Microsoft.Copilot", 
-        "Microsoft.Windows.Recall",
-        "Microsoft.Windows.AI"
-    )
-}
-
-$global:BloatwareRegex = $global:Bloatware -join '|'
 #endregion
 
 #region [FUNCIONES DE LIMPIEZA]
@@ -161,20 +97,10 @@ function Clear-WindowsTemp {
 
 function Clear-InternetCache {
     Write-Log "========== LIMPIANDO CACHE DE INTERNET ==========" "TASK"
-    
-    Write-Log "Limpiando cache de Internet Explorer..." "INFO"
     try {
+        Write-Log "Limpiando cache de Internet Explorer..." "INFO"
         Start-Process -FilePath "RunDll32.exe" -ArgumentList "InetCpl.cpl,ClearMyTracksByProcess 8" -NoNewWindow -Wait
-        Write-Log "  ✓ Cache de IE eliminada (completo)" "OK"
-        
-        Start-Process -FilePath "RunDll32.exe" -ArgumentList "InetCpl.cpl,ClearMyTracksByProcess 4" -NoNewWindow -Wait
-        Write-Log "  ✓ Cache de IE eliminada (historial)" "OK"
-        
-        Start-Process -FilePath "RunDll32.exe" -ArgumentList "InetCpl.cpl,ClearMyTracksByProcess 2" -NoNewWindow -Wait
-        Write-Log "  ✓ Cache de IE eliminada (cookies)" "OK"
-        
-        Start-Process -FilePath "RunDll32.exe" -ArgumentList "InetCpl.cpl,ClearMyTracksByProcess 1" -NoNewWindow -Wait
-        Write-Log "  ✓ Cache de IE eliminada (archivos temporales)" "OK"
+        Write-Log "  ✓ Cache de IE eliminada" "OK"
     } catch {
         Write-Log "  ✗ Error limpiando cache de IE" "WARN"
     }
@@ -212,7 +138,7 @@ function Disable-Firewall {
         netsh advfirewall set domainprofile state off | Out-Null
         netsh advfirewall set privateprofile state off | Out-Null
         netsh advfirewall set publicprofile state off | Out-Null
-        Write-Log "  ✓ Firewall deshabilitado completamente" "OK"
+        Write-Log "  ✓ Firewall deshabilitado" "OK"
     } catch {
         Write-Log "Error deshabilitando firewall: $_" "ERROR"
     }
@@ -226,27 +152,20 @@ function Clear-WindowsUpdateCache {
         net stop bits /y | Out-Null
         net stop wuauserv /y | Out-Null
         net stop cryptsvc /y | Out-Null
-        net stop appidsvc /y | Out-Null
         Write-Log "  ✓ Servicios detenidos" "OK"
         
         Write-Log "Limpiando carpetas..." "INFO"
-        @("$env:SystemRoot\SoftwareDistribution", "$env:SystemRoot\system32\catroot2", "$env:ALLUSERSPROFILE\Application Data\Microsoft\Network\Downloader") | ForEach-Object {
+        @("$env:SystemRoot\SoftwareDistribution", "$env:SystemRoot\system32\catroot2") | ForEach-Object {
             if (Test-Path $_) { 
                 Remove-Item "$_\*" -Recurse -Force -EA 0
                 Write-Log "  ✓ Limpiado: $_" "OK"
             }
         }
         
-        Write-Log "Restaurando permisos de servicios..." "INFO"
-        sc.exe sdset bits D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;AU)(A;;CCLCSWRPWPDTLOCRRC;;;PU) | Out-Null
-        sc.exe sdset wuauserv D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;AU)(A;;CCLCSWRPWPDTLOCRRC;;;PU) | Out-Null
-        Write-Log "  ✓ Permisos restaurados" "OK"
-        
         Write-Log "Reiniciando servicios..." "INFO"
         net start bits | Out-Null
         net start wuauserv | Out-Null
         net start cryptsvc | Out-Null
-        net start appidsvc | Out-Null
         Write-Log "  ✓ Servicios reiniciados" "OK"
     } catch {
         Write-Log "Error: $_" "ERROR"
@@ -263,37 +182,26 @@ function Register-DLLs {
         "rsaenh.dll", "gpkcsp.dll", "sccbase.dll", "slbcsp.dll", "cryptdlg.dll",
         "oleaut32.dll", "ole32.dll", "shell32.dll", "initpki.dll", "wuapi.dll",
         "wuaueng.dll", "wuaueng1.dll", "wucltui.dll", "wups.dll", "wups2.dll",
-        "wuweb.dll", "qmgr.dll", "qmgrprxy.dll", "wucltux.dll", "muweb.dll",
-        "wuwebv.dll"
+        "wuweb.dll", "qmgr.dll", "qmgrprxy.dll"
     )
     
     Push-Location "$env:windir\system32"
-    $registered = 0
-    $failed = 0
-    
     foreach ($dll in $dlls) {
         try {
             if (Test-Path $dll) {
                 regsvr32.exe /s $dll
-                $registered++
                 Write-Log "  ✓ Registrado: $dll" "OK"
-            } else {
-                Write-Log "  ✗ No encontrado: $dll" "WARN"
-                $failed++
             }
         } catch {
             Write-Log "  ✗ Error registrando: $dll" "WARN"
-            $failed++
         }
     }
     Pop-Location
-    Write-Log "========== COMPLETADO: $registered registrados, $failed fallidos ==========" "OK"
+    Write-Log "========== COMPLETADO ==========" "OK"
 }
 
 function Invoke-FullCleanup {
     Write-Log "========== LIMPIEZA COMPLETA DEL SISTEMA ==========" "TASK"
-    Write-Log "Iniciando limpieza profunda..." "INFO"
-    
     Clear-CurrentUserTemp
     Clear-AllUsersTemp
     Clear-WindowsTemp
@@ -302,9 +210,8 @@ function Invoke-FullCleanup {
     Disable-Firewall
     Clear-WindowsUpdateCache
     Register-DLLs
-    
     Write-Log "========== LIMPIEZA COMPLETA FINALIZADA ==========" "OK"
-    Write-Log "Se recomienda reiniciar el sistema para aplicar todos los cambios." "INFO"
+    Write-Log "Se recomienda reiniciar el sistema." "INFO"
 }
 #endregion
 
@@ -312,65 +219,49 @@ function Invoke-FullCleanup {
 function Remove-AllBloatware {
     Write-Log "========== ELIMINANDO BLOATWARE ==========" "TASK"
     $removed = 0
-    $failed = 0
     
-    Write-Log "Paso 1: Eliminando paquetes de usuario..." "INFO"
-    $userPackages = Get-AppxPackage | Where-Object { $_.Name -match $global:BloatwareRegex }
-    foreach ($pkg in $userPackages) {
-        try {
-            Remove-AppxPackage -Package $pkg -EA 0
-            $removed++
-            Write-Log "  ✓ Eliminado: $($pkg.Name)" "OK"
-        } catch {
-            $failed++
-            Write-Log "  ✗ Error: $($pkg.Name)" "WARN"
-        }
-    }
-    
-    Write-Log "Paso 2: Eliminando paquetes provisionados..." "INFO"
-    $provisionedPackages = Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -match $global:BloatwareRegex }
-    foreach ($pkg in $provisionedPackages) {
-        try {
-            Remove-AppxProvisionedPackage -Online -PackageName $pkg.PackageName -EA 0
-            $removed++
-            Write-Log "  ✓ Eliminado provisionado: $($pkg.DisplayName)" "OK"
-        } catch {
-            $failed++
-            Write-Log "  ✗ Error: $($pkg.DisplayName)" "WARN"
-        }
-    }
-    
-    Write-Log "Paso 3: Desactivando telemetría y privacidad..." "INFO"
-    $tp = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\DataCollection"
-    if (!(Test-Path $tp)) { New-Item $tp -Force | Out-Null }
-    Set-ItemProperty $tp -Name "AllowTelemetry" -Value 0 -EA 0
-    Write-Log "  ✓ Telemetría desactivada" "OK"
-    
-    $bp = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Search"
-    if (!(Test-Path $bp)) { New-Item $bp -Force | Out-Null }
-    Set-ItemProperty $bp -Name "BingSearchEnabled" -Value 0 -EA 0
-    Write-Log "  ✓ Bing Search desactivado" "OK"
-    
-    $cp = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search"
-    if (!(Test-Path $cp)) { New-Item $cp -Force | Out-Null }
-    Set-ItemProperty $cp -Name "AllowCortana" -Value 0 -EA 0
-    Write-Log "  ✓ Cortana desactivada" "OK"
+    $bloatware = @(
+        "Microsoft.BingNews", "Microsoft.BingWeather", "Microsoft.GetHelp", "Microsoft.Getstarted",
+        "Microsoft.Microsoft3DViewer", "Microsoft.MicrosoftOfficeHub", "Microsoft.MicrosoftSolitaireCollection",
+        "Microsoft.MixedReality.Portal", "Microsoft.Office.OneNote", "Microsoft.People", "Microsoft.Print3D",
+        "Microsoft.SkypeApp", "Microsoft.WindowsAlarms", "Microsoft.WindowsFeedbackHub", "Microsoft.WindowsMaps",
+        "Microsoft.Xbox.TCUI", "Microsoft.XboxApp", "Microsoft.XboxGameOverlay", "Microsoft.XboxGamingOverlay",
+        "Microsoft.XboxIdentityProvider", "Microsoft.YourPhone", "Microsoft.ZuneMusic", "Microsoft.ZuneVideo",
+        "CandyCrush", "Facebook", "Twitter", "Spotify", "Netflix", "Disney",
+        "Microsoft.Advertising.Xaml", "Microsoft.MSPaint", "Microsoft.Todos", "Microsoft.PowerAutomateDesktop",
+        "Microsoft.Windows.DevHome", "Microsoft.Windows.Photos", "Microsoft.Windows.ScreenSketch",
+        "Microsoft.WindowsSoundRecorder", "Microsoft.OutlookForWindows", "Microsoft.Clipchamp.Clipchamp"
+    )
     
     if ($global:IsWindows11) {
-        $wp = "HKLM:\SOFTWARE\Policies\Microsoft\Dsh"
-        if (!(Test-Path $wp)) { New-Item $wp -Force | Out-Null }
-        Set-ItemProperty $wp -Name "AllowNewsAndInterests" -Value 0 -EA 0
-        Write-Log "  ✓ News & Interests desactivado" "OK"
+        $bloatware += @("Microsoft.Copilot", "Microsoft.Windows.AI.Copilot")
     }
     
-    if ($global:Is24H2) {
-        $rp = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System"
-        if (!(Test-Path $rp)) { New-Item $rp -Force | Out-Null }
-        Set-ItemProperty $rp -Name "EnableRecall" -Value 0 -EA 0
-        Write-Log "  ✓ Recall desactivado" "OK"
+    $bloatwareRegex = $bloatware -join '|'
+    
+    Write-Log "Eliminando paquetes de usuario..." "INFO"
+    Get-AppxPackage | Where-Object { $_.Name -match $bloatwareRegex } | ForEach-Object {
+        try {
+            Remove-AppxPackage -Package $_ -EA 0
+            $removed++
+            Write-Log "  ✓ Eliminado: $($_.Name)" "OK"
+        } catch {
+            Write-Log "  ✗ Error: $($_.Name)" "WARN"
+        }
     }
     
-    Write-Log "========== COMPLETADO: $removed apps eliminadas, $failed fallidas ==========" "OK"
+    Write-Log "Eliminando paquetes provisionados..." "INFO"
+    Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -match $bloatwareRegex } | ForEach-Object {
+        try {
+            Remove-AppxProvisionedPackage -Online -PackageName $_.PackageName -EA 0
+            $removed++
+            Write-Log "  ✓ Eliminado provisionado: $($_.DisplayName)" "OK"
+        } catch {
+            Write-Log "  ✗ Error: $($_.DisplayName)" "WARN"
+        }
+    }
+    
+    Write-Log "========== COMPLETADO: $removed apps eliminadas ==========" "OK"
 }
 
 function Disable-Copilot {
@@ -383,210 +274,94 @@ function Disable-Copilot {
     }
     
     $removed = 0
-    $failed = 0
     
-    Write-Log "Paso 1: Deteniendo procesos de Copilot..." "INFO"
-    Get-Process -Name "*copilot*" -EA 0 | Stop-Process -Force -EA 0
-    Write-Log "  ✓ Procesos detenidos" "OK"
-    
-    Write-Log "Paso 2: Eliminando paquetes de Copilot del usuario..." "INFO"
-    $copilotUserPackages = Get-AppxPackage | Where-Object { 
-        $_.Name -match "Copilot|Microsoft.Windows.AI.Copilot|Microsoft.Copilot|Windows.AI" 
-    }
-    foreach ($pkg in $copilotUserPackages) {
+    Write-Log "Eliminando paquetes de Copilot..." "INFO"
+    Get-AppxPackage | Where-Object { $_.Name -match "Copilot|Microsoft.Windows.AI.Copilot|Microsoft.Copilot" } | ForEach-Object {
         try {
-            Remove-AppxPackage -Package $pkg -EA 0
+            Remove-AppxPackage -Package $_ -EA 0
             $removed++
-            Write-Log "  ✓ Eliminado: $($pkg.Name)" "OK"
+            Write-Log "  ✓ Eliminado: $($_.Name)" "OK"
         } catch {
-            $failed++
-            Write-Log "  ✗ Error: $($pkg.Name)" "WARN"
+            Write-Log "  ✗ Error: $($_.Name)" "WARN"
         }
     }
     
-    Write-Log "Paso 3: Eliminando paquetes provisionados de Copilot..." "INFO"
-    $copilotProvisioned = Get-AppxProvisionedPackage -Online | Where-Object { 
-        $_.DisplayName -match "Copilot|Microsoft.Windows.AI.Copilot|Microsoft.Copilot|Windows.AI" 
-    }
-    foreach ($pkg in $copilotProvisioned) {
+    Write-Log "Eliminando paquetes provisionados de Copilot..." "INFO"
+    Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -match "Copilot|Microsoft.Windows.AI.Copilot|Microsoft.Copilot" } | ForEach-Object {
         try {
-            Remove-AppxProvisionedPackage -Online -PackageName $pkg.PackageName -EA 0
+            Remove-AppxProvisionedPackage -Online -PackageName $_.PackageName -EA 0
             $removed++
-            Write-Log "  ✓ Eliminado provisionado: $($pkg.DisplayName)" "OK"
+            Write-Log "  ✓ Eliminado provisionado: $($_.DisplayName)" "OK"
         } catch {
-            $failed++
-            Write-Log "  ✗ Error: $($pkg.DisplayName)" "WARN"
+            Write-Log "  ✗ Error: $($_.DisplayName)" "WARN"
         }
     }
     
-    Write-Log "Paso 4: Desactivando Copilot en el registro..." "INFO"
-    $copilotRegPaths = @(
-        @{Path="HKCU:\Software\Microsoft\Windows\CurrentVersion\Copilot"; Name="TurnOffWindowsCopilot"; Value=1},
-        @{Path="HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot"; Name="TurnOffWindowsCopilot"; Value=1},
-        @{Path="HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"; Name="ShowCopilotButton"; Value=0},
-        @{Path="HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Copilot"; Name="TurnOffWindowsCopilot"; Value=1}
-    )
-    foreach ($reg in $copilotRegPaths) {
-        try {
-            if (!(Test-Path $reg.Path)) { New-Item $reg.Path -Force | Out-Null }
-            Set-ItemProperty -Path $reg.Path -Name $reg.Name -Value $reg.Value -EA 0
-            Write-Log "  ✓ Desactivado: $($reg.Name)=$($reg.Value)" "OK"
-        } catch {
-            Write-Log "  ✗ Error en registro: $($reg.Path)" "WARN"
-        }
+    Write-Log "Desactivando Copilot en el registro..." "INFO"
+    try {
+        $regPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot"
+        if (!(Test-Path $regPath)) { New-Item $regPath -Force | Out-Null }
+        Set-ItemProperty -Path $regPath -Name "TurnOffWindowsCopilot" -Value 1 -EA 0
+        Write-Log "  ✓ Copilot desactivado en registro" "OK"
+    } catch {
+        Write-Log "  ✗ Error en registro" "WARN"
     }
     
-    Write-Log "Paso 5: Limpiando archivos de Copilot..." "INFO"
-    $copilotPaths = @(
-        "$env:LOCALAPPDATA\Microsoft\Copilot",
-        "$env:APPDATA\Microsoft\Copilot",
-        "$env:LOCALAPPDATA\Packages\*Copilot*",
-        "$env:APPDATA\Packages\*Copilot*"
-    )
-    foreach ($path in $copilotPaths) {
-        try {
-            if (Test-Path $path) {
-                Remove-Item -Path $path -Recurse -Force -EA 0
-                Write-Log "  ✓ Eliminado: $path" "OK"
-            }
-        } catch {
-            Write-Log "  ✗ Error al eliminar: $path" "WARN"
-        }
-    }
-    
-    Write-Log "Paso 6: Reiniciando explorador para aplicar cambios..." "INFO"
+    Write-Log "Reiniciando explorador..." "INFO"
     try {
         Stop-Process -Name explorer -Force -EA 0
-        Start-Sleep -Seconds 3
+        Start-Sleep -Seconds 2
         Start-Process explorer.exe
         Write-Log "  ✓ Explorador reiniciado" "OK"
     } catch {
         Write-Log "  ✗ Error al reiniciar explorador" "WARN"
     }
     
-    Write-Log "========== COMPLETADO: $removed elementos eliminados, $failed fallidos ==========" "OK"
-    Write-Log "NOTA: Se recomienda reiniciar el sistema para aplicar todos los cambios." "INFO"
+    Write-Log "========== COMPLETADO: $removed elementos eliminados ==========" "OK"
+    Write-Log "Se recomienda reiniciar el sistema." "INFO"
 }
 #endregion
 
 #region [FUNCIONES DE INSTALACIÓN]
-function Remove-OneDrive {
-    Write-Log "========== DESINSTALANDO ONEDRIVE ==========" "TASK"
-    try {
-        Get-Process "OneDrive*" -EA 0 | Stop-Process -Force
-        $uninstaller = "$env:SYSTEMROOT\SysWOW64\OneDriveSetup.exe"
-        if (!(Test-Path $uninstaller)) { $uninstaller = "$env:SYSTEMROOT\System32\OneDriveSetup.exe" }
-        if (Test-Path $uninstaller) {
-            Write-Log "Ejecutando desinstalador..." "INFO"
-            Start-Process $uninstaller "/uninstall" -NoNewWindow -Wait
-            Write-Log "  ✓ OneDrive desinstalado" "OK"
-        } else { Write-Log "  ✗ Desinstalador no encontrado" "WARN" }
-    } catch { Write-Log "Error: $_" "ERROR" }
-    Write-Log "========== COMPLETADO ==========" "OK"
-}
-
-function Install-OneDrive {
-    Write-Log "========== INSTALANDO ONEDRIVE ==========" "TASK"
-    $installer = "$global:DownloadDir\OneDriveSetup.exe"
-    try {
-        Write-Log "Descargando instalador..." "INFO"
-        Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/?linkid=844652" -OutFile $installer -UseBasicParsing
-        if ((Get-Item $installer -EA 0).Length -gt 1MB) {
-            Write-Log "Ejecutando instalador..." "INFO"
-            Start-Process $installer "/silent" -Wait
-            Write-Log "  ✓ OneDrive instalado correctamente" "OK"
-        } else { throw "Archivo descargado no válido" }
-    } catch { Write-Log "Error: $_" "ERROR" }
-    finally { if (Test-Path $installer) { Remove-Item $installer -Force -EA 0 } }
-    Write-Log "========== COMPLETADO ==========" "OK"
-}
-
-function Install-Teams {
-    Write-Log "========== INSTALANDO MICROSOFT TEAMS ==========" "TASK"
-    if (-not $global:WingetAvailable) { 
-        Write-Log "Winget no disponible. Abriendo página de descarga..." "WARN"
-        Start-Process "https://www.microsoft.com/es-mx/microsoft-teams/download-app"
-        return
-    }
-    try {
-        winget install --id Microsoft.Teams --exact --accept-package-agreements --accept-source-agreements --silent
-        if ($LASTEXITCODE -eq 0) { Write-Log "  ✓ Teams instalado correctamente" "OK" } 
-        else { Write-Log "  ✗ Error en instalación. Código: $LASTEXITCODE" "WARN" }
-    } catch { Write-Log "Error: $_" "ERROR" }
-    Write-Log "========== COMPLETADO ==========" "OK"
-}
-
-function Install-Copilot {
-    Write-Log "========== INSTALANDO COPILOT ==========" "TASK"
-    
-    if (-not $global:IsWindows11) {
-        Write-Log "Copilot solo está disponible en Windows 11" "WARN"
-        Write-Log "Abriendo página web de Copilot..." "INFO"
-        Start-Process "https://copilot.microsoft.com/"
-        Write-Log "========== COMPLETADO ==========" "OK"
-        return
-    }
-    
-    Write-Log "Opción 1: Intentando instalar desde Microsoft Store..." "INFO"
-    try {
-        Start-Process "ms-windows-store://pdp/?productid=9N9K4M7VZP0C"
-        Write-Log "  ✓ Se ha abierto Microsoft Store. Busca 'Copilot' y haz clic en Instalar." "INFO"
-    } catch {
-        Write-Log "  ✗ Error al abrir la tienda: $_" "WARN"
-    }
-    
-    Write-Log "Opción 2: Intentando instalar con Winget..." "INFO"
-    if ($global:WingetAvailable) {
-        try {
-            winget install --id Microsoft.Copilot --exact --accept-package-agreements --accept-source-agreements --silent
-            if ($LASTEXITCODE -eq 0) { 
-                Write-Log "  ✓ Copilot instalado correctamente con Winget" "OK"
-                Write-Log "Reiniciando explorador..." "INFO"
-                Stop-Process -Name explorer -Force -EA 0
-                Start-Sleep -Seconds 2
-                Start-Process explorer.exe
-                Write-Log "========== COMPLETADO ==========" "OK"
-                return
-            }
-        } catch {
-            Write-Log "  ✗ Error con Winget: $_" "WARN"
-        }
-    } else {
-        Write-Log "  ✗ Winget no disponible" "WARN"
-    }
-    
-    Write-Log "Opción 3: Abriendo página web de Copilot..." "INFO"
-    Start-Process "https://copilot.microsoft.com/"
-    Write-Log "  ✓ Puedes usar Copilot desde el navegador mientras tanto." "INFO"
-    
-    Write-Log "========== COMPLETADO ==========" "OK"
-}
-
 function Install-SelectedApps {
     param([string[]]$Apps)
     if ($global:InstallRunning) { Write-Log "Ya hay una instalacion en curso" "WARN"; return }
     $global:InstallRunning = $true
     Write-Log "========== INSTALANDO APLICACIONES ==========" "TASK"
-    if (-not $global:WingetAvailable) { Write-Log "Winget no disponible" "WARN"; $global:InstallRunning = $false; return }
+    
+    # Verificar Winget
+    $wingetAvailable = $false
+    try {
+        if (Get-Command winget -ErrorAction SilentlyContinue) {
+            $wingetAvailable = $true
+        }
+    } catch { }
+    
+    if (-not $wingetAvailable) { 
+        Write-Log "Winget no disponible. Abriendo páginas de descarga..." "WARN"
+        foreach ($app in $Apps) {
+            switch ($app) {
+                "7zip" { Start-Process "https://www.7-zip.org/" }
+                "Chrome" { Start-Process "https://www.google.com/chrome/" }
+                "Firefox" { Start-Process "https://www.mozilla.org/firefox/" }
+                "VLC" { Start-Process "https://www.videolan.org/vlc/" }
+            }
+        }
+        $global:InstallRunning = $false
+        return
+    }
     
     foreach ($app in $Apps) {
         Write-Log "Instalando: $app..." "INFO"
         try {
             switch ($app) {
                 "7zip" { winget install --id 7zip.7zip --silent --accept-package-agreements --accept-source-agreements }
-                "Chrome" { 
-                    $tempDir = "C:\ChromeTemp"
-                    New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
-                    $env:TEMP = $tempDir
-                    $env:TMP = $tempDir
-                    winget install --id Google.Chrome --silent --accept-package-agreements --accept-source-agreements
-                    Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue 
-                }
+                "Chrome" { winget install --id Google.Chrome --silent --accept-package-agreements --accept-source-agreements }
                 "Firefox" { winget install --id Mozilla.Firefox --silent --accept-package-agreements --accept-source-agreements }
                 "VLC" { winget install --id VideoLAN.VLC --silent --accept-package-agreements --accept-source-agreements }
             }
             if ($LASTEXITCODE -eq 0) { Write-Log "  ✓ Instalado: $app" "OK" } 
-            else { Write-Log "  ✗ Error: $app (Código: $LASTEXITCODE)" "WARN" }
+            else { Write-Log "  ✗ Error: $app" "WARN" }
         } catch { Write-Log "  ✗ Error: $_" "ERROR" }
         [System.Windows.Forms.Application]::DoEvents()
     }
@@ -595,138 +370,28 @@ function Install-SelectedApps {
 }
 #endregion
 
-#region [FUNCIONES DE SISTEMA]
-function Optimize-System {
-    Write-Log "========== OPTIMIZANDO SISTEMA ==========" "TASK"
-    
-    Write-Log "Ajustando configuración de rendimiento..." "INFO"
-    $pp = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile"
-    if (!(Test-Path $pp)) { New-Item $pp -Force | Out-Null }
-    Set-ItemProperty $pp -Name "SystemResponsiveness" -Value 10 -EA 0
-    Write-Log "  ✓ SystemResponsiveness ajustado" "OK"
-    
-    Write-Log "Deshabilitando servicios innecesarios..." "INFO"
-    $services = @("SysMain", "WSearch")
-    foreach ($svc in $services) {
-        try {
-            Stop-Service $svc -Force -EA 0
-            Set-Service $svc -StartupType Disabled -EA 0
-            Write-Log "  ✓ Servicio deshabilitado: $svc" "OK"
-        } catch {
-            Write-Log "  ✗ Error deshabilitando: $svc" "WARN"
-        }
-    }
-    
-    Write-Log "Activando plan de alto rendimiento..." "INFO"
-    try {
-        powercfg -setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>&1 | Out-Null
-        Write-Log "  ✓ Plan de alto rendimiento activado" "OK"
-    } catch {
-        Write-Log "  ✗ Error activando plan de alto rendimiento" "WARN"
-    }
-    
-    Write-Log "========== OPTIMIZACION COMPLETADA ==========" "OK"
-}
-
-function Repair-System {
-    Write-Log "========== REPARANDO SISTEMA ==========" "TASK"
-    
-    function Invoke-LongCommand {
-        param($Command, $Arguments, $StepName)
-        Write-Log "[$StepName] Ejecutando..." "INFO"
-        $process = Start-Process -FilePath $Command -ArgumentList $Arguments -NoNewWindow -PassThru
-        $elapsed = 0
-        while (-not $process.HasExited) {
-            Start-Sleep -Seconds 5
-            $elapsed += 5
-            Write-Log "[$StepName] En progreso... ($elapsed segundos)" "INFO"
-        }
-        $process.WaitForExit()
-        Write-Log "[$StepName] Completado. Código: $($process.ExitCode)" "OK"
-    }
-
-    Invoke-LongCommand "dism.exe" "/Online /Cleanup-Image /CheckHealth" "DISM CheckHealth"
-    Invoke-LongCommand "dism.exe" "/Online /Cleanup-Image /ScanHealth" "DISM ScanHealth"
-    Invoke-LongCommand "dism.exe" "/Online /Cleanup-Image /RestoreHealth" "DISM RestoreHealth"
-    Invoke-LongCommand "sfc.exe" "/scannow" "SFC Scannow"
-    Write-Log "========== REPARACION COMPLETADA ==========" "OK"
-}
-
-function Reset-WindowsUpdate {
-    Write-Log "========== REINICIANDO WINDOWS UPDATE ==========" "TASK"
-    Write-Log "Deteniendo servicios..." "INFO"
-    @("bits", "wuauserv", "appidsvc", "cryptsvc") | ForEach-Object { 
-        Stop-Service $_ -Force -EA 0
-        Write-Log "  ✓ $_ detenido" "OK"
-    }
-    Write-Log "Limpiando cache..." "INFO"
-    @("$env:SystemRoot\SoftwareDistribution", "$env:SystemRoot\system32\catroot2") | ForEach-Object { 
-        if (Test-Path $_) { 
-            Remove-Item "$_\*" -Recurse -Force -EA 0
-            Write-Log "  ✓ $_ limpiado" "OK"
-        }
-    }
-    Write-Log "Reiniciando servicios..." "INFO"
-    @("bits", "wuauserv", "appidsvc", "cryptsvc") | ForEach-Object { 
-        Start-Service $_ -EA 0
-        Write-Log "  ✓ $_ iniciado" "OK"
-    }
-    Write-Log "========== COMPLETADO ==========" "OK"
-}
-
-function Create-RestorePoint {
-    Write-Log "========== CREANDO PUNTO DE RESTAURACION ==========" "TASK"
-    try {
-        Checkpoint-Computer -Description "Windows Optimizer - Antes de cambios" -EA 0
-        Write-Log "  ✓ Punto de restauracion creado exitosamente" "OK"
-    } catch { Write-Log "  ✗ No se pudo crear punto de restauracion" "WARN" }
-    Write-Log "========== COMPLETADO ==========" "OK"
-}
-
-function Kill-HungProcesses {
-    Write-Log "========== TERMINANDO PROCESOS BLOQUEADOS ==========" "TASK"
-    if ($global:RepairTimer -ne $null) { $global:RepairTimer.Stop(); $global:RepairTimer.Dispose(); $global:RepairTimer = $null }
-    if ($global:CurrentJob -ne $null) { Stop-Job $global:CurrentJob -EA 0; Remove-Job $global:CurrentJob -Force -EA 0; $global:CurrentJob = $null; $global:RepairRunning = $false }
-    $procs = @("dism", "sfc", "TiWorker", "TrustedInstaller", "OneDriveSetup", "winget", "copilot", "explorer")
-    $killed = 0
-    foreach ($proc in $procs) {
-        try {
-            Get-Process -Name $proc -EA 0 | Stop-Process -Force -EA 0 | Out-Null
-            $killed++
-            Write-Log "  ✓ Terminado: $proc" "OK"
-        } catch {
-            Write-Log "  ✗ No encontrado: $proc" "INFO"
-        }
-    }
-    Write-Log "========== COMPLETADO: $killed procesos terminados ==========" "OK"
-}
-#endregion
-
 #region [INTERFAZ GRAFICA]
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-# Colores predefinidos
+# Colores
 $colorBg = [System.Drawing.Color]::FromArgb(45, 45, 48)
 $colorBtn = [System.Drawing.Color]::FromArgb(85, 85, 85)
 $colorBtnSpecial = [System.Drawing.Color]::FromArgb(51, 170, 51)
-$colorBtnKill = [System.Drawing.Color]::FromArgb(170, 102, 51)
 $colorBtnClose = [System.Drawing.Color]::FromArgb(170, 51, 51)
 $colorBtnFull = [System.Drawing.Color]::FromArgb(119, 119, 119)
 $colorBtnCopilot = [System.Drawing.Color]::FromArgb(0, 120, 200)
 $colorText = [System.Drawing.Color]::White
 $colorLog = [System.Drawing.Color]::LightGreen
 
-# Fuentes
 $fontTitle = New-Object System.Drawing.Font("Consolas", 9, [System.Drawing.FontStyle]::Bold)
 $fontNorm = New-Object System.Drawing.Font("Consolas", 8, [System.Drawing.FontStyle]::Regular)
 $fontSmall = New-Object System.Drawing.Font("Consolas", 7, [System.Drawing.FontStyle]::Regular)
 $fontItalic = New-Object System.Drawing.Font("Consolas", 7, [System.Drawing.FontStyle]::Italic)
 
-# Formulario
 $Form = New-Object System.Windows.Forms.Form
-$Form.ClientSize = New-Object System.Drawing.Point(520, 700)
+$Form.ClientSize = New-Object System.Drawing.Point(520, 660)
 $Form.StartPosition = 'CenterScreen'
 $Form.FormBorderStyle = 'FixedSingle'
 $Form.MinimizeBox = $false
@@ -738,7 +403,6 @@ $Form.BackColor = $colorBg
 $currentY = 5
 $btnWidth = 500
 
-# Helper para botones
 function New-Button {
     param($Text, $X, $Y, $Width, $Height, $Color, $ClickAction)
     $btn = New-Object System.Windows.Forms.Button
@@ -767,9 +431,8 @@ $lblDebloat.ForeColor = $colorText
 
 $btnRemoveAll = New-Button "ELIMINAR BLOATWARE" 5 25 240 28 $colorBtn { Remove-AllBloatware }
 $btnDisableCopilot = New-Button "DESACTIVAR COPILOT" 250 25 245 28 $colorBtnCopilot { Disable-Copilot }
-$btnRemoveOD = New-Button "DESINSTALAR ONEDRIVE" 5 56 490 25 $colorBtn { Remove-OneDrive }
 
-$pnlDebloat.Controls.AddRange(@($lblDebloat, $btnRemoveAll, $btnDisableCopilot, $btnRemoveOD))
+$pnlDebloat.Controls.AddRange(@($lblDebloat, $btnRemoveAll, $btnDisableCopilot))
 $currentY += 88
 
 # Panel Limpieza
@@ -795,7 +458,7 @@ $currentY += 133
 
 # Panel Instalacion
 $pnlInstall = New-Object System.Windows.Forms.Panel
-$pnlInstall.Size = New-Object System.Drawing.Size($btnWidth, 135)
+$pnlInstall.Size = New-Object System.Drawing.Size($btnWidth, 110)
 $pnlInstall.Location = New-Object System.Drawing.Point(10, $currentY)
 $pnlInstall.BackColor = $colorBg
 
@@ -814,13 +477,6 @@ $chkFirefox.Text = "Firefox"; $chkFirefox.Location = New-Object System.Drawing.P
 $chkVLC = New-Object System.Windows.Forms.CheckBox
 $chkVLC.Text = "VLC"; $chkVLC.Location = New-Object System.Drawing.Point(330, 25); $chkVLC.Font = $fontNorm; $chkVLC.ForeColor = $colorText
 
-$chkOneDrive = New-Object System.Windows.Forms.CheckBox
-$chkOneDrive.Text = "OneDrive"; $chkOneDrive.Location = New-Object System.Drawing.Point(10, 50); $chkOneDrive.Font = $fontNorm; $chkOneDrive.ForeColor = $colorText
-$chkTeams = New-Object System.Windows.Forms.CheckBox
-$chkTeams.Text = "Teams"; $chkTeams.Location = New-Object System.Drawing.Point(120, 50); $chkTeams.Font = $fontNorm; $chkTeams.ForeColor = $colorText
-$chkCopilot = New-Object System.Windows.Forms.CheckBox
-$chkCopilot.Text = "Copilot"; $chkCopilot.Location = New-Object System.Drawing.Point(230, 50); $chkCopilot.Font = $fontNorm; $chkCopilot.ForeColor = $colorText
-
 $btnInstall = New-Button "INSTALAR SELECCIONADAS" 5 75 490 30 $colorBtnSpecial {
     if ($global:InstallRunning) { Write-Log "Ya hay una instalacion en curso" "WARN"; return }
     $apps = @()
@@ -828,20 +484,13 @@ $btnInstall = New-Button "INSTALAR SELECCIONADAS" 5 75 490 30 $colorBtnSpecial {
     if ($chkChrome.Checked) { $apps += "Chrome" }
     if ($chkFirefox.Checked) { $apps += "Firefox" }
     if ($chkVLC.Checked) { $apps += "VLC" }
-    
     if ($apps.Count -gt 0) { Install-SelectedApps -Apps $apps }
-    if ($chkOneDrive.Checked) { Install-OneDrive }
-    if ($chkTeams.Checked) { Install-Teams }
-    if ($chkCopilot.Checked) { Install-Copilot }
-    
     $chk7zip.Checked = $false; $chkChrome.Checked = $false
     $chkFirefox.Checked = $false; $chkVLC.Checked = $false
-    $chkOneDrive.Checked = $false; $chkTeams.Checked = $false
-    $chkCopilot.Checked = $false
 }
 
-$pnlInstall.Controls.AddRange(@($lblInstall, $chk7zip, $chkChrome, $chkFirefox, $chkVLC, $chkOneDrive, $chkTeams, $chkCopilot, $btnInstall))
-$currentY += 143
+$pnlInstall.Controls.AddRange(@($lblInstall, $chk7zip, $chkChrome, $chkFirefox, $chkVLC, $btnInstall))
+$currentY += 118
 
 # Panel Herramientas
 $pnlTools = New-Object System.Windows.Forms.Panel
@@ -854,6 +503,57 @@ $lblTools.Text = "HERRAMIENTAS"
 $lblTools.Location = New-Object System.Drawing.Point(10, 3)
 $lblTools.Font = $fontTitle
 $lblTools.ForeColor = $colorText
+
+function Optimize-System {
+    Write-Log "========== OPTIMIZANDO SISTEMA ==========" "TASK"
+    Write-Log "Activando plan de alto rendimiento..." "INFO"
+    powercfg -setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c 2>&1 | Out-Null
+    Write-Log "  ✓ Plan de alto rendimiento activado" "OK"
+    Write-Log "========== OPTIMIZACION COMPLETADA ==========" "OK"
+}
+
+function Repair-System {
+    Write-Log "========== REPARANDO SISTEMA ==========" "TASK"
+    Write-Log "Ejecutando DISM..." "INFO"
+    dism.exe /Online /Cleanup-Image /RestoreHealth
+    Write-Log "Ejecutando SFC..." "INFO"
+    sfc.exe /scannow
+    Write-Log "========== REPARACION COMPLETADA ==========" "OK"
+}
+
+function Reset-WindowsUpdate {
+    Write-Log "========== REINICIANDO WINDOWS UPDATE ==========" "TASK"
+    Write-Log "Deteniendo servicios..." "INFO"
+    net stop bits /y | Out-Null
+    net stop wuauserv /y | Out-Null
+    Write-Log "Limpiando cache..." "INFO"
+    if (Test-Path "$env:SystemRoot\SoftwareDistribution") { 
+        Remove-Item "$env:SystemRoot\SoftwareDistribution\*" -Recurse -Force -EA 0
+    }
+    Write-Log "Reiniciando servicios..." "INFO"
+    net start bits | Out-Null
+    net start wuauserv | Out-Null
+    Write-Log "========== COMPLETADO ==========" "OK"
+}
+
+function Create-RestorePoint {
+    Write-Log "========== CREANDO PUNTO DE RESTAURACION ==========" "TASK"
+    try {
+        Checkpoint-Computer -Description "Windows Optimizer" -EA 0
+        Write-Log "  ✓ Punto de restauracion creado" "OK"
+    } catch { Write-Log "  ✗ No se pudo crear punto de restauracion" "WARN" }
+    Write-Log "========== COMPLETADO ==========" "OK"
+}
+
+function Kill-HungProcesses {
+    Write-Log "========== TERMINANDO PROCESOS BLOQUEADOS ==========" "TASK"
+    $procs = @("dism", "sfc", "TiWorker", "TrustedInstaller", "winget")
+    foreach ($proc in $procs) {
+        Get-Process -Name $proc -EA 0 | Stop-Process -Force -EA 0 | Out-Null
+        Write-Log "  Terminado: $proc" "OK"
+    }
+    Write-Log "========== COMPLETADO ==========" "OK"
+}
 
 $btnOptimize = New-Button "OPTIMIZAR" 5 28 115 28 $colorBtn { Optimize-System }
 $btnRepair = New-Button "REPARAR" 125 28 115 28 $colorBtn { Repair-System }
@@ -869,13 +569,13 @@ $pnlControl.Size = New-Object System.Drawing.Size($btnWidth, 45)
 $pnlControl.Location = New-Object System.Drawing.Point(10, $currentY)
 $pnlControl.BackColor = $colorBg
 
-$btnKill = New-Button "TERMINAR PROCESOS BLOQUEADOS" 5 8 490 30 $colorBtnKill { Kill-HungProcesses }
+$btnKill = New-Button "TERMINAR PROCESOS BLOQUEADOS" 5 8 490 30 $colorBtn { Kill-HungProcesses }
 $pnlControl.Controls.Add($btnKill)
 $currentY += 53
 
 # Creditos
 $lblCredit = New-Object System.Windows.Forms.Label
-$lblCredit.Text = "Creado con DeepSeek por CFRG, con cariño - V7.2"
+$lblCredit.Text = "Creado por CFRG - V7.2"
 $lblCredit.Location = New-Object System.Drawing.Point(10, $currentY)
 $lblCredit.Size = New-Object System.Drawing.Size($btnWidth, 14)
 $lblCredit.Font = $fontItalic
@@ -919,11 +619,9 @@ $timer.Add_Tick({
 })
 $timer.Start()
 
-# Mensaje inicial
 Write-Log "=========================================" "INFO"
 Write-Log "Windows Optimizer v$global:ScriptVersion" "INFO"
 Write-Log "Sistema: $global:WindowsVersion (Build $global:WindowsBuild)" "INFO"
-Write-Log "Windows 10: $global:IsWindows10 | Windows 11: $global:IsWindows11 | 24H2: $global:Is24H2" "INFO"
 Write-Log "=========================================" "INFO"
 Write-Log "Listo - Selecciona una opcion" "INFO"
 Write-Log "=========================================" "INFO"
