@@ -70,7 +70,9 @@ function Clear-CurrentUserTemp {
             Get-ChildItem "$env:TEMP" -Recurse -EA 0 | Where-Object { !$_.PSIsContainer } | Remove-Item -Force -EA 0
             Write-Log "Limpieza de Temp completada" "OK"
         }
-    } catch { Write-Log "Error: $_" "ERROR" }
+    } catch {
+        Write-Log "Error: $_" "ERROR"
+    }
     Write-Log "========== COMPLETADO ==========" "OK"
 }
 
@@ -128,7 +130,9 @@ function Run-DiskCleanup {
         } else {
             Write-Log "  ✗ cleanmgr.exe no encontrado" "WARN"
         }
-    } catch { Write-Log "Error: $_" "ERROR" }
+    } catch {
+        Write-Log "Error: $_" "ERROR"
+    }
     Write-Log "========== COMPLETADO ==========" "OK"
 }
 
