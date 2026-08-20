@@ -949,6 +949,7 @@ $timer.Start()
 
 Write-Log "=========================================" "INFO"
 Write-Log "Windows Optimizer v$global:ScriptVersion" "INFO"
+Write-Log "Creado por Carlos Riaño para los Compadres" "INFO"
 Write-Log "Sistema: $global:WindowsVersion (Build $global:WindowsBuild)" "INFO"
 
 $originalUser = Get-OriginalUser
